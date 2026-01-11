@@ -1,3 +1,4 @@
+import 'package:intl/intl.dart'; // New import for DateFormat
 import 'package:my_chat_app/main.dart'; // New import for MainAppState
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -153,52 +154,75 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                     final chat = _chats[index];
                     return GestureDetector(
                       onLongPress: () => _showDeleteChatConfirmation(chat),
-                      child: Card(
-                        margin: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 8.0), // Smaller margins
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).cardColor, // Use card color from theme for consistency
+                          borderRadius: BorderRadius.circular(12.0), // Rounded corners for chat items
+                          boxShadow: [ // Subtle shadow for depth
+                            BoxShadow(
+                              color: Colors.grey.withOpacity(0.1),
+                              spreadRadius: 1,
+                              blurRadius: 3,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
                         child: ListTile(
+                          contentPadding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 16.0), // Adjusted padding
                           leading: CircleAvatar(
+                            radius: 24, // Slightly larger avatar
+                            backgroundColor: Colors.blue.shade300, // Distinct, consistent background color
                             backgroundImage: chat.otherUserProfilePictureUrl != null
                                 ? NetworkImage(chat.otherUserProfilePictureUrl!)
                                 : null,
                             child: chat.otherUserProfilePictureUrl == null
-                                ? const Icon(Icons.person)
+                                ? Text(
+                                    chat.otherUserName.isNotEmpty ? chat.otherUserName[0].toUpperCase() : '',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                                  )
                                 : null,
                           ),
-                          title: Text(chat.relationshipType.name),
-                          subtitle: Row(
-                            children: [
-                              // Show status icon only for current user's last message
-                              if (chat.lastMessageSenderId != null &&
-                                  chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid)
-                                  _buildMessageStatusIcon(chat.lastMessageStatus, chat),
-                              Expanded(
-                                child: Text(
-                                  (() {
-                                    String displayContent;
-                                    if (chat.lastMessageContent == null) {
-                                      displayContent = '[No message]';
-                                    } else {
-                                      try {
-                                        displayContent = _encryptionService.decryptText(chat.lastMessageContent!);
-                                      } catch (e) {
-                                        print('HomeScreen: Decryption failed for chat ${chat.id}, lastMessageContent: ${chat.lastMessageContent}. Error: $e');
-                                        displayContent = '[Encrypted Message Error]';
+                          title: Text(
+                            chat.otherUserName,
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), // Prominent name
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4.0), // Padding above subtitle
+                            child: Row(
+                              children: [
+                                if (chat.lastMessageSenderId != null &&
+                                    chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid)
+                                  _buildMessageStatusIcon(chat.lastMessageStatus, chat), // Status icon
+                                Expanded(
+                                  child: Text(
+                                    (() {
+                                      String displayContent;
+                                      if (chat.lastMessageContent == null) {
+                                        displayContent = '[No message]';
+                                      } else {
+                                        try {
+                                          displayContent = _encryptionService.decryptText(chat.lastMessageContent!);
+                                        } catch (e) {
+                                          print('HomeScreen: Decryption failed for chat ${chat.id}, lastMessageContent: ${chat.lastMessageContent}. Error: $e');
+                                          displayContent = '[Encrypted Message Error]';
+                                        }
                                       }
-                                    }
-                                    return chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid
-                                        ? 'You: $displayContent'
-                                        : '${chat.otherUserName}: $displayContent';
-                                  })(),
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: 14, color: chat.relationshipType.textColor.withOpacity(0.9)),
+                                      return chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid
+                                          ? 'You: $displayContent'
+                                          : '${chat.otherUserName}: $displayContent';
+                                    })(),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 14, color: Colors.grey), // Soft gray for message preview
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                           trailing: Text(
-                            '${chat.lastMessageTime.toLocal().hour.toString().padLeft(2, '0')}:' +
-                                '${chat.lastMessageTime.toLocal().minute.toString().padLeft(2, '0')}',
-                            style: TextStyle(fontSize: 12, color: chat.relationshipType.textColor.withOpacity(0.7)),
+                            _formatMessageTimestamp(chat.lastMessageTime),
+                            style: const TextStyle(fontSize: 12, color: Colors.grey), // Soft gray for timestamp
                           ),
                           onTap: () {
                             Navigator.of(context).push(
@@ -271,5 +295,23 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
         color: iconColor,
       ),
     );
+  }
+
+  String _formatMessageTimestamp(DateTime timestamp) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    final messageDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
+
+    if (messageDate.isAtSameMomentAs(today)) {
+      return '${timestamp.toLocal().hour.toString().padLeft(2, '0')}:${timestamp.toLocal().minute.toString().padLeft(2, '0')}';
+    } else if (messageDate.isAtSameMomentAs(yesterday)) {
+      return 'Yesterday';
+    } else if (now.difference(messageDate).inDays < 7) {
+      // Within the last 7 days, show weekday
+      return DateFormat('EEE').format(timestamp.toLocal()); // E.g., 'Mon'
+    } else {
+      return DateFormat('dd/MM/yyyy').format(timestamp.toLocal()); // E.g., '01/01/2026'
+    }
   }
 }

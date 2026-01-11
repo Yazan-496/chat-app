@@ -1,0 +1,10 @@
+const AndroidNotificationDetails androidDetails =
+    AndroidNotificationDetails(
+  'chat_channel',
+  'Chat Notifications',
+  channelDescription: 'Message notifications',
+  importance: Importance.max,
+  priority: Priority.high,
+  playSound: true,
+  sound: RawResourceAndroidNotificationSound('notification'),
+);

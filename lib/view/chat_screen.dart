@@ -1,3 +1,4 @@
+import 'package:intl/intl.dart'; // New import for DateFormat
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/message.dart';
@@ -6,6 +7,8 @@ import 'package:my_chat_app/view/chat_view.dart';
 import 'package:my_chat_app/view/voice_message_player.dart'; // New import
 import 'package:my_chat_app/model/relationship.dart'; // Import for RelationshipExtension
 import 'package:image_picker/image_picker.dart'; // Import for ImageSource
+import 'package:my_chat_app/view/profile_screen.dart'; // Import for ProfileScreen
+import 'package:my_chat_app/view/profile_screen.dart'; // Import for ProfileScreen
 
 class ChatScreen extends StatefulWidget {
   final Chat chat;
@@ -129,8 +132,38 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.chat.otherUserName),
-        backgroundColor: widget.chat.relationshipType.primaryColor,
+        title: GestureDetector(
+          onTap: () {
+            // Navigate to user profile/info screen
+            // You'll need the other user's ID to pass to the ProfileScreen
+            // Assuming `widget.chat.otherUserId` exists or can be derived
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => ProfileScreen(userId: widget.chat.getOtherUserId(_presenter.currentUserId!)), // Placeholder other user ID
+              ),
+            );
+          },
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 18, // Smaller avatar for header
+                backgroundColor: Colors.blue.shade300, // Consistent background color
+                backgroundImage: widget.chat.otherUserProfilePictureUrl != null
+                    ? NetworkImage(widget.chat.otherUserProfilePictureUrl!)
+                    : null,
+                child: widget.chat.otherUserProfilePictureUrl == null
+                    ? Text(
+                        widget.chat.otherUserName.isNotEmpty ? widget.chat.otherUserName[0].toUpperCase() : '',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 20),
+              Text(widget.chat.otherUserName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+        backgroundColor: Colors.grey.shade800,
       ),
       body: Column(
         children: [
@@ -151,39 +184,71 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                             children: [
                               if (message.replyToMessageId != null)
                                 _buildReplyPreview(message.replyToMessageId!),
-                              Container(
-                                margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-                                padding: widget.chat.relationshipType.chatBubblePadding,
-                                decoration: BoxDecoration(
-                                  color: isCurrentUser(message.senderId)
-                                      ? widget.chat.relationshipType.primaryColor
-                                      : widget.chat.relationshipType.accentColor,
-                                  borderRadius: widget.chat.relationshipType.chatBubbleRadius,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if (message.type == MessageType.text)
-                                      Text(
-                                        message.editedContent ?? message.content,
-                                        style: TextStyle(color: widget.chat.relationshipType.textColor),
+                              Row(
+                                mainAxisAlignment: isCurrentUser(message.senderId) ? MainAxisAlignment.end : MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  if (!isCurrentUser(message.senderId))
+                                    _buildMessageAvatar(message.senderId, isCurrentUser(message.senderId), widget.chat.otherUserProfilePictureUrl),
+                                  Expanded(
+                                    child: Container(
+                                      margin: EdgeInsets.only(
+                                        left: isCurrentUser(message.senderId) ? 200.0 : 8.0, // Indent incoming messages
+                                        right: isCurrentUser(message.senderId) ? 8.0 : 200.0, // Indent outgoing messages
+                                        top: 4.0,
+                                        bottom: 4.0,
                                       ),
-                                    if (message.type == MessageType.image)
-                                      Image.network(message.content, width: 200), // Display image
-                                    if (message.type == MessageType.voice)
-                                      VoiceMessagePlayer(
-                                        audioUrl: message.content,
-                                        backgroundColor: isCurrentUser(message.senderId)
-                                            ? widget.chat.relationshipType.primaryColor
-                                            : widget.chat.relationshipType.accentColor,
-                                        textColor: widget.chat.relationshipType.textColor,
-                                      ), // Voice message player
-                                    const SizedBox(height: 4.0),
-                                    _buildMessageStatusWidget(message, isCurrentUser(message.senderId)),
-                                    if (message.reactions.isNotEmpty)
-                                      _buildReactions(message.reactions),
-                                  ],
-                                ),
+                                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0), // Consistent padding
+                                      decoration: BoxDecoration(
+                                        color: isCurrentUser(message.senderId)
+                                            ? Colors.blue.shade200 // Blue for outgoing
+                                            : Colors.grey.shade300, // Light gray for incoming
+                                        borderRadius: BorderRadius.only(
+                                          topLeft: const Radius.circular(12.0),
+                                          topRight: const Radius.circular(12.0),
+                                          bottomLeft: Radius.circular(isCurrentUser(message.senderId) ? 12.0 : 4.0),
+                                          bottomRight: Radius.circular(isCurrentUser(message.senderId) ? 4.0 : 12.0),
+                                        ), // Modern rounded corners
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: isCurrentUser(message.senderId) ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                                        children: [
+                                          if (message.type == MessageType.text)
+                                            Text(
+                                              message.editedContent ?? message.content,
+                                              style: TextStyle(color: isCurrentUser(message.senderId) ? Colors.white : Colors.black87), // Adjust text color based on bubble color
+                                            ),
+                                          if (message.type == MessageType.image)
+                                            Image.network(message.content, width: 200),
+                                          if (message.type == MessageType.voice)
+                                            VoiceMessagePlayer(
+                                              audioUrl: message.content,
+                                              backgroundColor: isCurrentUser(message.senderId) ? Colors.blue.shade600 : Colors.grey.shade300, // Match bubble color
+                                              textColor: isCurrentUser(message.senderId) ? Colors.white : Colors.black87,
+                                            ),
+                                          const SizedBox(height: 4.0),
+                                          Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              if (isCurrentUser(message.senderId)) // Only show status for outgoing messages
+                                                _buildMessageStatusWidget(message, isCurrentUser(message.senderId)),
+                                              const SizedBox(width: 4), // Spacing between status and timestamp
+                                              Text(
+                                                _formatMessageTimestamp(message.timestamp),
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: isCurrentUser(message.senderId) ? Colors.white70 : Colors.black54,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          if (message.reactions.isNotEmpty)
+                                            _buildReactions(message.reactions),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -245,19 +310,40 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     );
   }
 
-  Widget _buildMessageStatusWidget(Message message, bool isCurrentUser) {
-    final formattedTime = '${message.timestamp.toLocal().hour.toString().padLeft(2, '0')}:${message.timestamp.toLocal().minute.toString().padLeft(2, '0')}';
+  void _showDeleteChatConfirmation(Chat chat) async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Delete Chat'),
+          content: Text('Are you sure you want to delete your chat with ${chat.otherUserName}? This action cannot be undone.'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
 
+    if (confirm == true) {
+      _presenter.deleteChat(chat.id);
+    }
+  }
+
+  Widget _buildMessageStatusWidget(Message message, bool isCurrentUser) {
     if (!isCurrentUser) {
-      return Text(
-        formattedTime,
-        style: TextStyle(fontSize: 10, color: widget.chat.relationshipType.textColor.withOpacity(0.7)),
-      );
+      return const SizedBox.shrink(); // No status for incoming messages
     }
 
-    // For outgoing messages, display status icons and timestamp
+    // For outgoing messages, display status icons
     IconData iconData;
-    Color iconColor = widget.chat.relationshipType.textColor.withOpacity(0.7);
+    Color iconColor = Colors.grey; // Default color
 
     switch (message.status) {
       case MessageStatus.sending:
@@ -265,30 +351,21 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         break;
       case MessageStatus.sent:
         iconData = Icons.check; // Single check for sent
+        iconColor = Colors.grey; // Set color for sent messages
         break;
       case MessageStatus.delivered:
         iconData = Icons.done_all; // Double check for delivered
         break;
       case MessageStatus.read:
         iconData = Icons.done_all; // Double check for read
-        iconColor = widget.chat.relationshipType.primaryColor; // Different color for read
+        iconColor = Colors.blue; // Different color for read
         break;
     }
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          formattedTime,
-          style: TextStyle(fontSize: 10, color: widget.chat.relationshipType.textColor.withOpacity(0.7)),
-        ),
-        const SizedBox(width: 4),
-        Icon(
-          iconData,
-          size: 14,
-          color: iconColor,
-        ),
-      ],
+    return Icon(
+      iconData,
+      size: 14,
+      color: iconColor,
     );
   }
 
@@ -323,7 +400,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           Text('Replying to: ${repliedMessage.senderId == _presenter.currentUserId ? 'You' : widget.chat.otherUserName}',
             style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.blueGrey)),
           Text(repliedMessage.type == MessageType.text ? repliedMessage.content : '[${repliedMessage.type.name} message]',
-            style: const TextStyle(fontSize: 12)),
+            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.green)),
         ],
       ),
     );
@@ -444,5 +521,42 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     // TODO: Implement emoji picker and reaction logic
     showMessage('Showing emoji picker for: ${message.content}');
     _presenter.addReaction(message.id, '❤️'); // Placeholder reaction
+  }
+
+  Widget _buildMessageAvatar(String senderId, bool isCurrentUser, String? otherUserProfilePictureUrl) {
+    if (isCurrentUser) {
+      // Optionally show current user's avatar, or an empty SizedBox for alignment
+      return const SizedBox(width: 30); // Placeholder for alignment
+    }
+    return CircleAvatar(
+      radius: 15,
+      backgroundColor: Colors.blue.shade300,
+      backgroundImage: otherUserProfilePictureUrl != null
+          ? NetworkImage(otherUserProfilePictureUrl)
+          : null,
+      child: otherUserProfilePictureUrl == null
+          ? Text(
+              widget.chat.otherUserName.isNotEmpty ? widget.chat.otherUserName[0].toUpperCase() : '',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            )
+          : null,
+    );
+  }
+
+  String _formatMessageTimestamp(DateTime timestamp) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    final messageDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
+
+    if (messageDate.isAtSameMomentAs(today)) {
+      return DateFormat('HH:mm').format(timestamp.toLocal()); // E.g., '14:30'
+    } else if (messageDate.isAtSameMomentAs(yesterday)) {
+      return 'Yesterday, ${DateFormat('HH:mm').format(timestamp.toLocal())}';
+    } else if (now.difference(messageDate).inDays < 7) {
+      return DateFormat('EEE, HH:mm').format(timestamp.toLocal()); // E.g., 'Mon, 14:30'
+    } else {
+      return DateFormat('dd/MM/yyyy, HH:mm').format(timestamp.toLocal()); // E.g., '01/01/2026, 14:30'
+    }
   }
 }

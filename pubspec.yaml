@@ -25,6 +25,7 @@ dependencies:
   pointycastle: ^3.9.1
   timezone: ^0.10.0
   collection: ^1.18.0 # For firstWhereOrNull extension method
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:

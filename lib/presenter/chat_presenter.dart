@@ -290,6 +290,16 @@ class ChatPresenter {
   Chat get chat => _chat;
 
   /// Disposes of resources used by the presenter (e.g., audio recorder, player).
+  /// Deletes a chat and all its messages.
+  Future<void> deleteChat(String chatId) async {
+    try {
+      await _chatRepository.deleteChat(chatId);
+      _view.showMessage('Chat deleted successfully.');
+    } catch (e) {
+      _view.showMessage('Failed to delete chat: $e');
+    }
+  }
+
   void dispose() {
     _audioRecorder.dispose();
     _audioPlayer.dispose();
