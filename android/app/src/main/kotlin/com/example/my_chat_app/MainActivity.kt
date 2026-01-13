@@ -49,6 +49,10 @@ class MainActivity : FlutterActivity() {
                 "isBubblePermissionReady" -> {
                     result.success(isBubblePermissionReady())
                 }
+                "moveTaskToBack" -> {
+                    moveTaskToBack(true)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

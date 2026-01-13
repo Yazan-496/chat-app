@@ -7,6 +7,8 @@ import 'package:my_chat_app/model/relationship.dart'; // Ensure Relationship is 
 import 'package:my_chat_app/model/message.dart';
 // dart:io and firebase_storage removed because not used in this repository file
 import 'package:collection/collection.dart'; // For firstWhereOrNull
+import 'package:my_chat_app/services/notification_service.dart';
+import 'dart:convert';
 
 /// Repository for managing chat and message data in Firestore.
 /// It handles all interactions with the 'chats' and 'messages' collections.
@@ -51,15 +53,27 @@ class ChatRepository {
 
         if (otherUser != null) {
           print('ChatRepository: Found other user: ${otherUser.username}');
+          
+          // Fetch unread messages count for this chat
+          final unreadSnapshot = await doc.reference
+              .collection('messages')
+              .where('receiverId', isEqualTo: userId)
+              .where('status', isNotEqualTo: 'read')
+              .get();
+          final unreadCount = unreadSnapshot.docs.length;
+
           chats.add(Chat(
             id: doc.id,
             participantIds: participantIds,
             otherUserName: otherUser.username,
             otherUserProfilePictureUrl: otherUser.profilePictureUrl,
             relationshipType: RelationshipType.values.firstWhereOrNull(
-                (e) => e.toString() == 'RelationshipType.' + (chatData['relationshipType'] as String)) ?? RelationshipType.friend,
-            lastMessageTime: DateTime.parse(chatData['lastMessageTime'] as String),
+                (e) => e.toString() == 'RelationshipType.' + (chatData['relationshipType'] as String? ?? 'friend')) ?? RelationshipType.friend,
+            lastMessageTime: chatData['lastMessageTime'] is Timestamp 
+                ? (chatData['lastMessageTime'] as Timestamp).toDate() 
+                : (chatData['lastMessageTime'] != null ? DateTime.tryParse(chatData['lastMessageTime'].toString()) ?? DateTime.now() : DateTime.now()),
             lastMessageContent: chatData['lastMessageContent'] as String?,
+            unreadCount: unreadCount,
           ));
         }
       }
@@ -112,15 +126,46 @@ class ChatRepository {
     final messageRef = chatRef.collection('messages').doc(message.id);
 
     await messageRef.set(message.toMap());
+    // Update the message document to use server timestamp for the 'timestamp' field
+    await messageRef.update({'timestamp': FieldValue.serverTimestamp()});
+
     // Update status to sent after successful initial write
     await updateMessageStatus(message.chatId, message.id, MessageStatus.sent);
     // Update last message in chat for real-time chat list updates
     await chatRef.update({
-      'lastMessageTime': message.timestamp.toIso8601String(),
+      'lastMessageTime': FieldValue.serverTimestamp(),
       'lastMessageContent': message.type == MessageType.text ? message.content : '[${message.type.name} message]',
       'lastMessageSenderId': message.senderId, // Update with sender ID
       'lastMessageStatus': message.status.toString().split('.').last, // Update with message status
     });
+
+    try {
+      if (NotificationService.relayEndpoint != null) {
+        final receiverDoc = await _firestore.collection('users').doc(message.receiverId).get();
+        final token = (receiverDoc.data() ?? {})['fcmToken'] as String?;
+        if (token != null && token.isNotEmpty) {
+          final title = 'New Message';
+          final body = message.type == MessageType.text ? message.content : '[${message.type.name} message]';
+          final v1 = NotificationService.buildFcmHttpV1Message(
+            token: token,
+            title: title,
+            body: body,
+            data: {
+              'type': 'message',
+              'chatId': message.chatId,
+              'senderId': message.senderId,
+              'title': title,
+              'body': body,
+            },
+          );
+          await NotificationService.sendFcmViaRelay(
+            endpoint: NotificationService.relayEndpoint!,
+            v1Message: v1,
+            headers: {'Accept': 'application/json'},
+          );
+        }
+      }
+    } catch (_) {}
   }
 
   /// Sets typing status for a given user in a chat.
@@ -170,12 +215,55 @@ class ChatRepository {
     await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
       'status': status.toString().split('.').last,
     });
+    
+    // Also update the chat document's lastMessageStatus if this might be the last message
+    // To be efficient, we only do this for 'read' or 'delivered' statuses
+    if (status == MessageStatus.read || status == MessageStatus.delivered) {
+      await _firestore.collection('chats').doc(chatId).update({
+        'lastMessageStatus': status.toString().split('.').last,
+      });
+    }
+  }
+
+  /// Batch update statuses for multiple messages in a chat.
+  Future<void> updateMessagesStatusBatch(String chatId, Map<String, MessageStatus> updates) async {
+    if (updates.isEmpty) return;
+    final batch = _firestore.batch();
+    final chatRef = _firestore.collection('chats').doc(chatId);
+    final messagesRef = chatRef.collection('messages');
+    
+    MessageStatus? highestStatus;
+    
+    updates.forEach((messageId, status) {
+      final docRef = messagesRef.doc(messageId);
+      batch.update(docRef, {'status': status.toString().split('.').last});
+      
+      // Track the "most advanced" status in the batch to update the chat doc
+      if (highestStatus == null || status.index > highestStatus!.index) {
+        highestStatus = status;
+      }
+    });
+    
+    if (highestStatus != null) {
+      batch.update(chatRef, {'lastMessageStatus': highestStatus.toString().split('.').last});
+    }
+    
+    await batch.commit();
   }
 
   /// Edits the text content of an existing message.
   Future<void> editTextMessage(String chatId, String messageId, String newContent) async {
     await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
       'editedContent': newContent,
+    });
+  }
+
+  /// Marks a message as deleted and replaces content with a placeholder.
+  Future<void> deleteMessage(String chatId, String messageId) async {
+    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
+      'deleted': true,
+      'content': 'Removed message',
+      'type': 'text',
     });
   }
 

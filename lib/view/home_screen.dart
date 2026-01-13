@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:intl/intl.dart'; // New import for DateFormat
 import 'package:my_chat_app/main.dart'; // New import for MainAppState
 import 'package:flutter/material.dart';
@@ -12,8 +14,11 @@ import 'package:my_chat_app/view/chat_screen.dart';
 import 'package:my_chat_app/view/home_view.dart';
 import 'package:my_chat_app/view/profile_screen.dart';
 import 'package:my_chat_app/view/settings_screen.dart'; // New import
+import 'package:my_chat_app/view/auth_screen.dart';
 import 'package:my_chat_app/view/user_discovery_screen.dart';
 import 'package:my_chat_app/services/notification_service.dart';
+import 'package:my_chat_app/services/bubble_service.dart';
+import 'package:flutter/services.dart';
 
 class HomeScreen extends StatefulWidget {
   final String? initialChatId;
@@ -23,29 +28,98 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> implements HomeView {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver implements HomeView {
   late HomePresenter _presenter;
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
   final EncryptionService _encryptionService = EncryptionService(); // New instance
   final LocalStorageService _localStorageService = LocalStorageService(); // New instance
   List<Chat> _chats = [];
   bool _isLoading = false;
+  StreamSubscription<String>? _navigationSubscription;
+  StreamSubscription<String>? _bubbleNavigationSubscription;
+  String? _initialChatId;
 
   @override
   void initState() {
     super.initState();
+    _initialChatId = widget.initialChatId;
+    WidgetsBinding.instance.addObserver(this);
     _presenter = HomePresenter(this);
     _presenter.loadChats();
+    _checkNotificationLaunch();
+    
+    // Listen for notification taps while the app is in foreground
+    _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
+      NotificationService.setPendingNavigationChatId(chatId);
+      if (_chats.isNotEmpty) {
+        displayChats(_chats);
+      }
+    });
+
+    // Listen for bubble taps while the app is in foreground
+    _bubbleNavigationSubscription = BubbleService.navigationStream.listen((chatId) {
+      NotificationService.setPendingNavigationChatId(chatId);
+      if (_chats.isNotEmpty) {
+        displayChats(_chats);
+      }
+    });
+
     NotificationService().getToken().then((token) {
       if (token != null) {
         debugPrint('FCM_TOKEN=$token');
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          // ScaffoldMessenger.of(context).showSnackBar(
-            // SnackBar(content: Text('FCM: $token')),
-          // );
-        });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _navigationSubscription?.cancel();
+    _bubbleNavigationSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Check for pending navigation when app comes back to foreground
+      if (_chats.isNotEmpty) {
+        displayChats(_chats);
+      }
+    }
+  }
+
+  Future<void> _checkNotificationLaunch() async {
+    // 1. Check local notifications launch
+    final details = await flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
+    if (details != null && details.didNotificationLaunchApp && details.notificationResponse?.payload != null) {
+      try {
+        final payload = jsonDecode(details.notificationResponse!.payload!);
+        final chatId = payload['chatId'] as String?;
+        if (chatId != null) {
+          // Store it so displayChats can use it
+          NotificationService.setPendingNavigationChatId(chatId);
+          // If chats are already loaded, trigger navigation
+          if (_chats.isNotEmpty) {
+            displayChats(_chats);
+          }
+        }
+      } catch (e) {
+        print('Error checking notification launch: $e');
+      }
+    }
+
+    // 2. Check bubble launch (via native MethodChannel)
+    try {
+      const platform = MethodChannel('com.example.my_chat_app/bubbles');
+      final String? chatId = await platform.invokeMethod('getLaunchChatId');
+      if (chatId != null && chatId.isNotEmpty) {
+        NotificationService.setPendingNavigationChatId(chatId);
+        if (_chats.isNotEmpty) {
+          displayChats(_chats);
+        }
+      }
+    } catch (_) {}
   }
 
   @override
@@ -77,8 +151,12 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
       _chats = chats;
     });
     final mainApp = context.findAncestorStateOfType<MainAppState>();
-    final pendingId = mainApp?.consumePendingChatId() ?? widget.initialChatId;
+    final pendingId = mainApp?.consumePendingChatId() ?? 
+                     _consumeInitialChatId() ?? 
+                     NotificationService.consumePendingNavigationChatId();
+    
     if (pendingId != null) {
+      debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
       Chat? target;
       for (final c in _chats) {
         if (c.id == pendingId) {
@@ -87,6 +165,7 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
         }
       }
       if (target != null) {
+        debugPrint('HomeScreen: Navigating to chat: ${target.id}');
         WidgetsBinding.instance.addPostFrameCallback((_) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -94,8 +173,16 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
             ),
           );
         });
+      } else {
+        debugPrint('HomeScreen: Warning - Target chat $pendingId not found in loaded chats');
       }
     }
+  }
+
+  String? _consumeInitialChatId() {
+    final id = _initialChatId;
+    _initialChatId = null;
+    return id;
   }
 
   @override
@@ -177,7 +264,20 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                         ),
                         child: IconButton(
                           icon: const Icon(Icons.camera_alt, color: Colors.white),
-                          onPressed: () {}, // Camera action
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => SettingsScreen(
+                                  onThemeChanged: (mode) {
+                                    final mainApp = context.findAncestorStateOfType<MainAppState>();
+                                    if (mainApp != null) {
+                                      mainApp.setThemeMode(mode);
+                                    }
+                                  },
+                                ),
+                              ),
+                            );
+                          },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -195,6 +295,24 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                                 ),
                               );
                           }, // New chat action
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade900,
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.logout, color: Colors.white),
+                          onPressed: () async {
+                            await _firebaseAuth.signOut();
+                            if (!mounted) return;
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(builder: (_) => const AuthScreen()),
+                              (route) => false,
+                            );
+                          },
                         ),
                       ),
                     ],
@@ -393,6 +511,27 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                         border: Border.all(color: Colors.black, width: 2),
                       ),
                     ),
+                  )
+                else if (chat.otherUserLastSeen != null && DateTime.now().difference(chat.otherUserLastSeen!).inMinutes < 10)
+                  Positioned(
+                    bottom: -2,
+                    right: -2,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.greenAccent.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.black, width: 1.5),
+                      ),
+                      child: Text(
+                        _formatCompactDuration(chat.otherUserLastSeen),
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -402,13 +541,28 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    chat.otherUserName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  Row(
+                    children: [
+                      Text(
+                        chat.otherUserName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (!chat.otherUserIsOnline && chat.otherUserLastSeen != null && DateTime.now().difference(chat.otherUserLastSeen!).inMinutes >= 10) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          _formatLastSeenShort(chat.otherUserLastSeen!),
+                          style: TextStyle(
+                            color: Colors.grey.shade500,
+                            fontSize: 11,
+                            fontWeight: FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Row(
@@ -443,9 +597,9 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                               return '$prefix$displayContent';
                             })(),
                           style: TextStyle(
-                            color: chat.lastMessageStatus == MessageStatus.read ? Colors.grey : Colors.white70,
+                            color: chat.unreadCount > 0 ? Colors.white : Colors.grey,
                             fontSize: 14,
-                            fontWeight: chat.lastMessageStatus == MessageStatus.read ? FontWeight.normal : FontWeight.w500,
+                            fontWeight: chat.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -454,7 +608,11 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                       const SizedBox(width: 4),
                       Text(
                         '· ${_formatMessageTimestamp(chat.lastMessageTime)}',
-                         style: const TextStyle(color: Colors.grey, fontSize: 12),
+                         style: TextStyle(
+                           color: chat.unreadCount > 0 ? Colors.blueAccent : Colors.grey, 
+                           fontSize: 12,
+                           fontWeight: chat.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
+                         ),
                       ),
                     ],
                   ),
@@ -466,10 +624,57 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
               (chat.lastMessageStatus == MessageStatus.read
                   ? _buildReadReceiptAvatar(chat)
                   : _buildMessageStatusIcon(chat.lastMessageStatus, chat)),
+            
+            // Unread count badge for incoming messages
+            if (chat.unreadCount > 0)
+              Container(
+                margin: const EdgeInsets.only(left: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${chat.unreadCount}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  String _formatCompactDuration(DateTime? lastSeen) {
+    if (lastSeen == null) return '';
+    final now = DateTime.now();
+    final difference = now.difference(lastSeen);
+    
+    if (difference.inSeconds < 60) return '${difference.inSeconds}s';
+    if (difference.inMinutes < 60) return '${difference.inMinutes}m';
+    if (difference.inHours < 24) return '${difference.inHours}h';
+    return '${difference.inDays}d';
+  }
+
+  String _formatLastSeenShort(DateTime lastSeen) {
+    final now = DateTime.now();
+    final difference = now.difference(lastSeen);
+
+    if (difference.inMinutes < 60) {
+      return 'last seen ${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return 'last seen ${difference.inHours}h ago';
+    } else if (difference.inDays == 1) {
+      return 'last seen yesterday';
+    } else if (difference.inDays < 7) {
+      return 'last seen ${DateFormat('EEE').format(lastSeen.toLocal())}';
+    } else {
+      return 'last seen ${DateFormat('dd/MM/yyyy').format(lastSeen.toLocal())}';
+    }
   }
 
   void _showDeleteChatConfirmation(Chat chat) async {
@@ -512,11 +717,15 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
                 title: const Text('Show as Bubble', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   Navigator.pop(context);
-                  await NotificationService.showBubble(
+                  await BubbleService.instance.start(
                     chatId: chat.id,
                     title: chat.otherUserName,
-                    body: 'Open conversation',
+                    body: 'Tap to chat',
                   );
+                  try {
+                    const platform = MethodChannel('com.example.my_chat_app/bubbles');
+                    await platform.invokeMethod('moveTaskToBack');
+                  } catch (_) {}
                 },
               ),
               ListTile(
@@ -592,35 +801,35 @@ class _HomeScreenState extends State<HomeScreen> implements HomeView {
       ),
     );
   }
-String _formatLastSeen(DateTime lastSeen) {
-  final now = DateTime.now();
-  final difference = now.difference(lastSeen);
+  String _formatLastSeen(DateTime lastSeen) {
+    final now = DateTime.now();
+    final difference = now.difference(lastSeen);
 
-  if (difference.inMinutes < 1) {
-    return 'Active now';
-  } else if (difference.inMinutes < 60) {
-    return 'Active ${difference.inMinutes}m ago';
-  } else if (difference.inHours < 24) {
-    return 'Active ${difference.inHours}h ago';
-  } else if (difference.inDays == 1) {
-    return 'Active yesterday';
-  } else if (difference.inDays < 7) {
-    return 'Active on ${DateFormat('EEE').format(lastSeen.toLocal())}';
-  } else {
-    return 'Active on ${DateFormat('dd/MM/yyyy').format(lastSeen.toLocal())}';
+    if (difference.inMinutes < 1) {
+      return 'Active now';
+    } else if (difference.inMinutes < 60) {
+      return 'Active ${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return 'Active ${difference.inHours}h ago';
+    } else if (difference.inDays == 1) {
+      return 'Active yesterday';
+    } else if (difference.inDays < 7) {
+      return 'Active on ${DateFormat('EEE').format(lastSeen.toLocal())}';
+    } else {
+      return 'Active on ${DateFormat('dd/MM/yyyy').format(lastSeen.toLocal())}';
+    }
   }
-}
 
-Color _getLastSeenColor(DateTime lastSeen) {
-  final now = DateTime.now();
-  final difference = now.difference(lastSeen);
+  Color _getLastSeenColor(DateTime lastSeen) {
+    final now = DateTime.now();
+    final difference = now.difference(lastSeen);
 
-  if (difference.inSeconds < 30) {
-    return Colors.greenAccent; 
-  } else {
-    return Colors.grey; 
+    if (difference.inSeconds < 30) {
+      return Colors.greenAccent;
+    } else {
+      return Colors.grey;
+    }
   }
-}
 
   String _formatMessageTimestamp(DateTime timestamp) {
     final now = DateTime.now();

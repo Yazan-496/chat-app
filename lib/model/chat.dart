@@ -1,6 +1,4 @@
-import 'package:my_chat_app/model/relationship.dart';
-import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
 
@@ -16,6 +14,7 @@ class Chat {
   final MessageStatus? lastMessageStatus; // New field
   bool otherUserIsOnline;
   DateTime? otherUserLastSeen;
+  int unreadCount; // New field for unread messages count
 
   String getOtherUserId(String currentUserId) {
     return participantIds.firstWhere((id) => id != currentUserId);
@@ -33,24 +32,35 @@ class Chat {
     this.lastMessageStatus,
     this.otherUserIsOnline = false,
     this.otherUserLastSeen,
+    this.unreadCount = 0,
   });
 
   factory Chat.fromMap(Map<String, dynamic> data) {
     return Chat(
-      id: data['id'] as String,
-      participantIds: List<String>.from(data['participantIds'] as List),
-      otherUserName: data['otherUserName'] as String,
+      id: data['id'] as String? ?? '',
+      participantIds: data['participantIds'] != null ? List<String>.from(data['participantIds'] as List) : [],
+      otherUserName: data['otherUserName'] as String? ?? 'Unknown',
       otherUserProfilePictureUrl: data['otherUserProfilePictureUrl'] as String?,
       relationshipType: RelationshipType.values.firstWhere(
-          (e) => e.toString() == 'RelationshipType.' + (data['relationshipType'] as String)),
-      lastMessageTime: DateTime.parse(data['lastMessageTime'] as String),
+          (e) => e.toString() == 'RelationshipType.' + (data['relationshipType'] as String? ?? 'friend'),
+          orElse: () => RelationshipType.friend),
+      lastMessageTime: data['lastMessageTime'] is Timestamp 
+          ? (data['lastMessageTime'] as Timestamp).toDate() 
+          : (data['lastMessageTime'] != null ? DateTime.tryParse(data['lastMessageTime'].toString()) ?? DateTime.now() : DateTime.now()),
       lastMessageContent: data['lastMessageContent'] as String?,
       lastMessageSenderId: data['lastMessageSenderId'] as String?,
       lastMessageStatus: data['lastMessageStatus'] != null
-          ? MessageStatus.values.firstWhere((e) => e.toString().split('.').last == data['lastMessageStatus'])
+          ? MessageStatus.values.firstWhere(
+              (e) => e.toString().split('.').last == data['lastMessageStatus'].toString(),
+              orElse: () => MessageStatus.sent)
           : null,
       otherUserIsOnline: data['otherUserIsOnline'] as bool? ?? false,
-      otherUserLastSeen: (data['otherUserLastSeen'] as String?) != null ? DateTime.parse(data['otherUserLastSeen'] as String) : null,
+      otherUserLastSeen: data['otherUserLastSeen'] != null 
+          ? (data['otherUserLastSeen'] is Timestamp 
+              ? (data['otherUserLastSeen'] as Timestamp).toDate() 
+              : DateTime.tryParse(data['otherUserLastSeen'].toString()))
+          : null,
+      unreadCount: data['unreadCount'] as int? ?? 0,
     );
   }
 
@@ -83,6 +93,7 @@ class Chat {
     MessageStatus? lastMessageStatus,
     bool? otherUserIsOnline,
     DateTime? otherUserLastSeen,
+    int? unreadCount,
   }) {
     return Chat(
       id: id ?? this.id,
@@ -96,6 +107,7 @@ class Chat {
       lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus,
       otherUserIsOnline: otherUserIsOnline ?? this.otherUserIsOnline,
       otherUserLastSeen: otherUserLastSeen ?? this.otherUserLastSeen,
+      unreadCount: unreadCount ?? this.unreadCount,
     );
   }
 }

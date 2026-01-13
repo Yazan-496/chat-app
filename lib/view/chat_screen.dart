@@ -47,9 +47,12 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   void initState() {
     super.initState();
     _presenter = ChatPresenter(this, widget.chat);
-    _presenter.loadMessages();
-    _presenter.markMessagesAsRead();
     NotificationService.setActiveChatId(widget.chat.id);
+    // Clear notifications for this chat when entering
+    flutterLocalNotificationsPlugin.cancel(widget.chat.id.hashCode);
+    flutterLocalNotificationsPlugin.cancel(widget.chat.id.hashCode + 1);
+    _presenter.loadMessages();
+    _presenter.scheduleReadMark();
   }
 
   @override
@@ -204,6 +207,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     final isCurrentUser = (senderId) => senderId == _presenter.currentUserId;
     final replyingTo = _presenter.selectedMessageForReply;
     final editingMessage = _presenter.selectedMessageForEdit;
+    final theme = Theme.of(context);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -274,10 +278,15 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                     widget.chat.otherUserName,
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                  if (_presenter.otherUserTyping)
+                  if (_presenter.otherUserTyping && widget.chat.otherUserIsOnline)
                     Text(
                       AppLocalizations.of(context).translate('typing'),
                       style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    )
+                  else if (_presenter.otherUserInChat && widget.chat.otherUserIsOnline)
+                    const Text(
+                      'In Chat',
+                      style: TextStyle(fontSize: 12, color: Colors.white70),
                     )
                   else
                     Text(
@@ -329,18 +338,72 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                         final bool isMe = isCurrentUser(message.senderId);
                         final bool showAvatar = !isMe && (index == 0 || _messages[index - 1].senderId != message.senderId);
 
-                        return MessageItem(
-                          key: ValueKey(message.id), // Key helps flutter reuse widgets efficiently
-                          message: message,
-                          isMe: isMe,
-                          showAvatar: showAvatar,
-                          otherUserProfilePictureUrl: widget.chat.otherUserProfilePictureUrl,
-                          otherUserName: widget.chat.otherUserName,
-                          isOnlyEmojis: _isOnlyEmojis(message.content) && message.type == MessageType.text,
-                          onLongPress: _showReactionPicker,
-                          buildReplyPreview: _buildReplyPreview,
-                          buildReactions: _buildReactions,
-                          buildMessageStatus: _buildMessageStatusWidget,
+                        final widgets = <Widget>[];
+                        final nextMsg = index > 0 ? _messages[index - 1] : null;
+                        final needsHeader = _needsTimeHeader(message, nextMsg);
+                        // if (needsHeader) {
+                        //   widgets.add(
+                        //     Padding(
+                        //       padding: const EdgeInsets.symmetric(vertical: 8.0),
+                        //       child: Center(
+                        //         child: Container(
+                        //           padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 6.0),
+                        //           decoration: BoxDecoration(
+                        //             color: Colors.grey.shade800,
+                        //             borderRadius: BorderRadius.circular(16.0),
+                        //           ),
+                        //           // child: Text(
+                        //           //   _formatHeader(message.timestamp),
+                        //           //   style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        //           // ),
+                        //         ),
+                        //       ),
+                        //     ),
+                        //   );
+                        // }
+                        if (message.replyToMessageId != null) {
+                          widgets.add(
+                            Align(
+                              alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 4.0),
+                                padding: const EdgeInsets.all(8.0),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(8.0),
+                                  border: Border.all(color: Colors.white.withOpacity(0.1)),
+                                ),
+                                child: InkWell(
+                                  onTap: () => _scrollToMessage(message.replyToMessageId!),
+                                  child: _buildReplyPreview(message.replyToMessageId!),
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                        widgets.add(
+                          MessageItem(
+                            key: _messageKeys.putIfAbsent(message.id, () => GlobalKey()),
+                            message: message,
+                            isMe: isMe,
+                            showAvatar: showAvatar,
+                            otherUserProfilePictureUrl: widget.chat.otherUserProfilePictureUrl,
+                            otherUserName: widget.chat.otherUserName,
+                            isOnlyEmojis: _isOnlyEmojis(message.content) && message.type == MessageType.text,
+                            onLongPress: _onMessageLongPress,
+                            onDoubleTapReact: _showReactionPicker,
+                            buildReplyPreview: _buildReplyPreview,
+                            buildReactions: _buildReactions,
+                            buildMessageStatus: _buildMessageStatusWidget,
+                            onSwipeReply: (m) {
+                              _presenter.selectMessageForReply(m);
+                              _inputFocusNode.requestFocus();
+                            },
+                          ),
+                        );
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: widgets,
                         );
                       },
                       separatorBuilder: (context, index) => const SizedBox(height: 10),
@@ -355,6 +418,103 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         ),
       ),
     ),
+    );
+  }
+
+  bool _needsTimeHeader(Message current, Message? next) {
+    if (next == null) return true;
+    final c = current.timestamp;
+    final n = next.timestamp;
+    return c.year != n.year ||
+        c.month != n.month ||
+        c.day != n.day ||
+        c.hour != n.hour ||
+        c.minute != n.minute;
+  }
+
+  String _formatHeader(DateTime dt) {
+    return DateFormat('EEEE, MMM d, yyyy • HH:mm').format(dt);
+  }
+
+  final Map<String, GlobalKey> _messageKeys = {};
+  void _scrollToMessage(String messageId) {
+    final key = _messageKeys[messageId];
+    final ctx = key?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(
+        ctx,
+        duration: const Duration(milliseconds: 300),
+        alignment: 0.2,
+        curve: Curves.easeInOut,
+      );
+    }
+  }
+
+  void _onMessageLongPress(Message message) async {
+    final isMine = message.senderId == _presenter.currentUserId;
+    final canEdit = isMine && message.type == MessageType.text && !message.deleted;
+    final canDelete = isMine && !message.deleted;
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.black,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.reply, color: Colors.white),
+                title: const Text('Reply', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _presenter.selectMessageForReply(message);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.emoji_emotions, color: Colors.white),
+                title: const Text('React', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showReactionPicker(message);
+                },
+              ),
+              if (canEdit)
+                ListTile(
+                  leading: const Icon(Icons.edit, color: Colors.white),
+                  title: const Text('Edit', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _presenter.selectMessageForEdit(message);
+                    _messageController.text = message.editedContent ?? message.content;
+                    _inputFocusNode.requestFocus();
+                  },
+                ),
+              if (canDelete)
+                ListTile(
+                  leading: const Icon(Icons.delete, color: Colors.redAccent),
+                  title: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                  onTap: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (context) => AlertDialog(
+                        title: const Text('Delete Message'),
+                        content: const Text('Are you sure you want to delete this message?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+                        ],
+                      ),
+                    );
+                    Navigator.pop(context);
+                    if (confirm == true) {
+                      await _presenter.deleteMessage(message);
+                    }
+                  },
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 

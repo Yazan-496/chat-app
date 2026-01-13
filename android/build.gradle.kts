@@ -32,6 +32,8 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Clean Gradle file; removed dash_bubble namespace injections and manifest hacks
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

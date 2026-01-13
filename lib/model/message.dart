@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 enum MessageStatus {
   sending,
   sent,
@@ -23,6 +25,7 @@ class Message {
   final String? replyToMessageId;
   final String? editedContent;
   final Map<String, String> reactions; // userId: emoji
+  final bool deleted;
 
   Message({
     required this.id,
@@ -36,21 +39,29 @@ class Message {
     this.replyToMessageId,
     this.editedContent,
     this.reactions = const {},
+    this.deleted = false,
   });
 
   factory Message.fromMap(Map<String, dynamic> data) {
     return Message(
-      id: data['id'] as String,
-      chatId: data['chatId'] as String,
-      senderId: data['senderId'] as String,
-      receiverId: data['receiverId'] as String,
-      type: MessageType.values.firstWhere((e) => e.toString() == 'MessageType.' + (data['type'] as String)),
-      content: data['content'] as String,
-      timestamp: DateTime.parse(data['timestamp'] as String),
-      status: MessageStatus.values.firstWhere((e) => e.toString() == 'MessageStatus.' + (data['status'] as String)),
+      id: data['id'] as String? ?? '',
+      chatId: data['chatId'] as String? ?? '',
+      senderId: data['senderId'] as String? ?? '',
+      receiverId: data['receiverId'] as String? ?? '',
+      type: MessageType.values.firstWhere(
+          (e) => e.toString() == 'MessageType.' + (data['type'] as String? ?? 'text'),
+          orElse: () => MessageType.text),
+      content: data['content'] as String? ?? '',
+      timestamp: data['timestamp'] is Timestamp 
+          ? (data['timestamp'] as Timestamp).toDate() 
+          : (data['timestamp'] != null ? DateTime.tryParse(data['timestamp'].toString()) ?? DateTime.now() : DateTime.now()),
+      status: MessageStatus.values.firstWhere(
+          (e) => e.toString() == 'MessageStatus.' + (data['status'] as String? ?? 'sent'),
+          orElse: () => MessageStatus.sent),
       replyToMessageId: data['replyToMessageId'] as String?,
       editedContent: data['editedContent'] as String?,
       reactions: Map<String, String>.from(data['reactions'] as Map? ?? {}),
+      deleted: (data['deleted'] as bool?) ?? false,
     );
   }
 
@@ -67,6 +78,7 @@ class Message {
       'replyToMessageId': replyToMessageId,
       'editedContent': editedContent,
       'reactions': reactions,
+      'deleted': deleted,
     };
   }
 
@@ -75,6 +87,7 @@ class Message {
     String? content,
     String? editedContent,
     Map<String, String>? reactions,
+    bool? deleted,
   }) {
     return Message(
       id: id,
@@ -88,6 +101,7 @@ class Message {
       replyToMessageId: replyToMessageId,
       editedContent: editedContent ?? this.editedContent,
       reactions: reactions ?? this.reactions,
+      deleted: deleted ?? this.deleted,
     );
   }
 }

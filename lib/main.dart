@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:my_chat_app/view/home_screen.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
@@ -25,6 +28,21 @@ void main() async {
   await NotificationService.ensureBubblePermission();
   
   runApp(const MainApp());
+}
+
+@pragma('vm:entry-point')
+void overlayMain() {
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: Material(
+      child: Center(
+        child: Text(
+          'Chat Bubble',
+          style: TextStyle(fontSize: 18),
+        ),
+      ),
+    ),
+  ));
 }
 
 class MainApp extends StatefulWidget {
@@ -40,6 +58,7 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
   Locale _locale = const Locale('en');
   final PresenceService _presenceService = PresenceService();
   String? _pendingChatId;
+  StreamSubscription<User?>? _authStateSubscription;
   static const MethodChannel _bubbleChannel = MethodChannel('com.example.my_chat_app/bubbles');
 
   @override
@@ -49,11 +68,21 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     _presenter = AppPresenter(this);
     _presenter.onInit();
     _setupBubbleIntentListener();
+
+    // Listen to auth state changes to start/stop global listener
+    _authStateSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user != null) {
+        NotificationService().startGlobalMessageListener(user.uid);
+      } else {
+        NotificationService().stopGlobalMessageListener();
+      }
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _authStateSubscription?.cancel();
     super.dispose();
   }
 
@@ -64,14 +93,17 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
 
     if (state == AppLifecycleState.resumed) {
       _presenceService.setUserOnline(user.uid);
+      NotificationService().startGlobalMessageListener(user.uid);
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
       _presenceService.setUserOffline(user.uid);
+      NotificationService().stopGlobalMessageListener();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'My Chat App',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,

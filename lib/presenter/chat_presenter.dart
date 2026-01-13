@@ -39,7 +39,10 @@ class ChatPresenter {
   String? _currentRecordingPath;
   bool _isRecording = false;
   Timer? _typingTimer;
+  Timer? _readTimer;
   StreamSubscription? _otherUserStatusSubscription; // New subscription for other user status
+  bool _otherUserInChat = false;
+  bool _otherUserInChatPrev = false;
 
   ChatPresenter(this._view, this._chat)
       : _chatRepository = ChatRepository(),
@@ -55,25 +58,13 @@ class ChatPresenter {
   bool get isRecording => _isRecording;
   bool _otherUserTyping = false;
   bool get otherUserTyping => _otherUserTyping;
+  bool get otherUserInChat => _otherUserInChat;
 
   /// Loads messages for the current chat and sets up a real-time listener.
   void loadMessages() {
     _chatRepository.getChatMessages(_chat.id).listen((messages) {
       final previousIds = _messages.map((m) => m.id).toSet();
       _messages = messages.map<Message>((message) {
-        // Handle incoming messages status updates
-        if (message.senderId == _chat.getOtherUserId(currentUserId!)) {
-          if (message.status == MessageStatus.sending || message.status == MessageStatus.sent) {
-            _chatRepository.updateMessageStatus(_chat.id, message.id, MessageStatus.delivered);
-            // Update the local message object to reflect the delivered status immediately
-            message = message.copyWith(status: MessageStatus.delivered);
-          } else if (message.status == MessageStatus.delivered) {
-            _chatRepository.updateMessageStatus(_chat.id, message.id, MessageStatus.read);
-            // Update the local message object to reflect the read status immediately
-            message = message.copyWith(status: MessageStatus.read);
-          }
-        }
-
         // Decrypt text messages before displaying.
         if (message.type == MessageType.text) {
           try {
@@ -93,10 +84,12 @@ class ChatPresenter {
         }
         return message;
       }).toList();
+      _markIncomingMessagesAsDelivered(_messages, previousIds);
       final otherId = _chat.getOtherUserId(currentUserId!);
       final hasNewIncoming = _messages.any((m) => m.senderId == otherId && !previousIds.contains(m.id));
-      if (hasNewIncoming && NotificationService.currentActiveChatId == _chat.id) {
-        SoundService.instance.playReceived();
+      if (NotificationService.currentActiveChatId == _chat.id && hasNewIncoming) {
+        // Schedule read marking for new incoming while we are in chat
+        scheduleReadMark();
       }
       _view.displayMessages(_messages);
       _view.updateView();
@@ -106,8 +99,15 @@ class ChatPresenter {
     final otherUserId = _chat.getOtherUserId(currentUserId!);
     _otherUserStatusSubscription = _userRepository.streamUserStatus(otherUserId).listen((otherUser) {
       if (otherUser != null) {
+        final wasInChat = _otherUserInChat;
         _chat.otherUserIsOnline = otherUser.isOnline;
         _chat.otherUserLastSeen = otherUser.lastSeen;
+        _otherUserInChat = otherUser.activeChatId == _chat.id;
+        _otherUserInChatPrev = wasInChat;
+        // If we are in this chat, always schedule read marking
+        if (NotificationService.currentActiveChatId == _chat.id) {
+          scheduleReadMark();
+        }
         _view.updateView(); // Notify UI to rebuild with updated status
       }
     });
@@ -136,6 +136,39 @@ class ChatPresenter {
         // ignore parsing errors
       }
     });
+  }
+
+  /// Filters incoming messages with status=sent and marks them delivered using a batch update.
+  Future<void> _markIncomingMessagesAsDelivered(List<Message> messages, Set<String> previousIds) async {
+    if (currentUserId == null) return;
+    final otherId = _chat.getOtherUserId(currentUserId!);
+    final toDeliver = <String, MessageStatus>{};
+    for (final m in messages) {
+      if (m.senderId == otherId && m.status == MessageStatus.sent) {
+        toDeliver[m.id] = MessageStatus.delivered;
+      }
+    }
+    if (toDeliver.isEmpty) return;
+    try {
+      await _chatRepository.updateMessagesStatusBatch(_chat.id, toDeliver);
+      // Update local state immediately
+      _messages = _messages.map((m) {
+        if (toDeliver.containsKey(m.id)) {
+          return m.copyWith(status: MessageStatus.delivered);
+        }
+        return m;
+      }).toList();
+      // Trigger sound if chat is open and any of these were new
+      final hadNewDelivered = _messages.any((m) => toDeliver.containsKey(m.id) && !previousIds.contains(m.id));
+      if (hadNewDelivered && NotificationService.currentActiveChatId == _chat.id) {
+        SoundService.instance.playReceived();
+      }
+    } catch (e) {
+      // If batch fails, fall back to individual updates
+      for (final entry in toDeliver.entries) {
+        await _chatRepository.updateMessageStatus(_chat.id, entry.key, entry.value);
+      }
+    }
   }
 
   /// Sends a text message. Encrypts the content before sending.
@@ -335,6 +368,17 @@ class ChatPresenter {
     _view.updateView();
   }
 
+  /// Deletes a message after confirmation by user.
+  Future<void> deleteMessage(Message message) async {
+    if (currentUserId == null) return;
+    if (message.senderId != currentUserId) {
+      _view.showMessage('You can only delete your own messages.');
+      return;
+    }
+    await _chatRepository.deleteMessage(_chat.id, message.id);
+    _view.updateView();
+  }
+
   /// Updates the status of a message.
   Future<void> updateMessageStatus(String messageId, MessageStatus status) async {
     await _chatRepository.updateMessageStatus(_chat.id, messageId, status);
@@ -378,20 +422,53 @@ class ChatPresenter {
     _audioRecorder.dispose();
     _audioPlayer.dispose();
     _otherUserStatusSubscription?.cancel(); // Cancel the status subscription
+    _readTimer?.cancel();
     SoundService.instance.stopTypingLoop();
   }
 
   /// Marks all delivered messages from the other user as read.
   void markMessagesAsRead() async {
+    if (NotificationService.currentActiveChatId != _chat.id) return;
     if (currentUserId == null) return;
     final otherUserId = _chat.getOtherUserId(currentUserId!);
     final deliveredMessages = _messages.where((message) =>
         message.senderId == otherUserId &&
         (message.status == MessageStatus.delivered || message.status == MessageStatus.sent));
 
+    if (deliveredMessages.isEmpty) return;
+
+    final updates = <String, MessageStatus>{};
     for (var message in deliveredMessages) {
-      await _chatRepository.updateMessageStatus(_chat.id, message.id, MessageStatus.read);
+      updates[message.id] = MessageStatus.read;
     }
-    _view.updateView(); // Refresh the UI to reflect read statuses
+    
+    try {
+      await _chatRepository.updateMessagesStatusBatch(_chat.id, updates);
+      // Update local state
+      _messages = _messages.map((m) {
+        if (updates.containsKey(m.id)) {
+          return m.copyWith(status: MessageStatus.read);
+        }
+        return m;
+      }).toList();
+      _view.displayMessages(_messages);
+      _view.updateView();
+      // Clear notifications for this chat after marking as read
+      flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode);
+      flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode + 1);
+    } catch (e) {
+      print('ChatPresenter: Failed to mark messages as read: $e');
+    }
+  }
+
+  /// Schedules marking messages as read after a short dwell to avoid accidental flicker.
+  void scheduleReadMark({Duration dwell = const Duration(milliseconds: 800)}) {
+    _readTimer?.cancel();
+    _readTimer = Timer(dwell, () {
+      // If we are in this chat, always mark messages as read
+      if (NotificationService.currentActiveChatId == _chat.id) {
+        markMessagesAsRead();
+      }
+    });
   }
 }

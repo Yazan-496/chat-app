@@ -7,6 +7,7 @@ class User {
   String? profilePictureUrl;
   bool isOnline;
   DateTime? lastSeen;
+  String? activeChatId;
 
   User({
     required this.uid,
@@ -15,6 +16,7 @@ class User {
     this.profilePictureUrl,
     this.isOnline = false,
     this.lastSeen,
+    this.activeChatId,
   });
 
   // Factory constructor for creating a User from a map (e.g., from Firestore)
@@ -37,12 +39,13 @@ class User {
     }
     
     return User(
-      uid: data['uid'] as String,
-      username: data['username'] as String,
-      displayName: data['displayName'] as String,
+      uid: data['uid'] as String? ?? '',
+      username: data['username'] as String? ?? 'Unknown',
+      displayName: data['displayName'] as String? ?? 'User',
       profilePictureUrl: data['profilePictureUrl'] as String?,
       isOnline: data['isOnline'] as bool? ?? false,
       lastSeen: lastSeen,
+      activeChatId: data['activeChatId'] as String?,
     );
   }
 
@@ -55,6 +58,7 @@ class User {
       'profilePictureUrl': profilePictureUrl,
       'isOnline': isOnline,
       'lastSeen': lastSeen != null ? Timestamp.fromDate(lastSeen!) : null,
+      'activeChatId': activeChatId,
     };
   }
 }
