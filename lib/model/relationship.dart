@@ -1,50 +1,77 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 enum RelationshipType {
-  lover,
-  closeFriend,
-  sibling,
+  none,
+  friend,
+  blocked,
+  pending,
 }
 
 extension RelationshipExtension on RelationshipType {
-  String get name {
-    switch (this) {
-      case RelationshipType.lover: return 'Lover';
-      case RelationshipType.closeFriend: return 'Close Friend';
-      case RelationshipType.sibling: return 'Sibling';
-    }
-  }
-
   Color get primaryColor {
     switch (this) {
-      case RelationshipType.lover: return Colors.pink.shade300;
-      case RelationshipType.closeFriend: return Colors.blue.shade300;
-      case RelationshipType.sibling: return Colors.green.shade300;
-    }
-  }
-
-  Color get accentColor {
-    switch (this) {
-      case RelationshipType.lover: return Colors.pink.shade100;
-      case RelationshipType.closeFriend: return Colors.blue.shade100;
-      case RelationshipType.sibling: return Colors.green.shade100;
+      case RelationshipType.friend:
+        return Colors.blue;
+      case RelationshipType.blocked:
+        return Colors.red;
+      case RelationshipType.pending:
+        return Colors.orange;
+      case RelationshipType.none:
+      default:
+        return Colors.grey;
     }
   }
 
   Color get textColor {
     switch (this) {
-      case RelationshipType.lover: return Colors.black87;
-      case RelationshipType.closeFriend: return Colors.black87;
-      case RelationshipType.sibling: return Colors.black87;
+      case RelationshipType.friend:
+        return Colors.blue.shade700;
+      case RelationshipType.blocked:
+        return Colors.red.shade700;
+      case RelationshipType.pending:
+        return Colors.orange.shade700;
+      case RelationshipType.none:
+      default:
+        return Colors.grey.shade700;
     }
   }
+}
 
-  // Example of chat bubble style properties
-  BorderRadiusGeometry get chatBubbleRadius {
-    return BorderRadius.circular(12.0);
+class Relationship {
+  final String id;
+  final String userId1;
+  final String userId2;
+  RelationshipType type;
+  final DateTime createdAt;
+
+  Relationship({
+    required this.id,
+    required this.userId1,
+    required this.userId2,
+    this.type = RelationshipType.none,
+    required this.createdAt,
+  });
+
+  factory Relationship.fromMap(Map<String, dynamic> data) {
+    return Relationship(
+      id: data['id'] as String,
+      userId1: data['userId1'] as String,
+      userId2: data['userId2'] as String,
+      type: RelationshipType.values.firstWhere(
+          (e) => e.toString() == 'RelationshipType.' + data['type'] as String,
+          orElse: () => RelationshipType.none),
+      createdAt: (data['createdAt'] as Timestamp).toDate(),
+    );
   }
 
-  EdgeInsetsGeometry get chatBubblePadding {
-    return const EdgeInsets.all(10.0);
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'userId1': userId1,
+      'userId2': userId2,
+      'type': type.toString().split('.').last,
+      'createdAt': createdAt,
+    };
   }
 }

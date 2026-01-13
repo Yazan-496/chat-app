@@ -2,41 +2,82 @@ import 'package:firebase_auth/firebase_auth.dart' as auth;
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/model/user.dart' as app_user;
 import 'package:my_chat_app/view/profile_view.dart';
+import 'package:my_chat_app/model/relationship.dart'; // New import
+import 'package:my_chat_app/data/chat_repository.dart'; // New import
+import 'dart:async'; // New import for StreamSubscription
 
 class ProfilePresenter {
   final ProfileView _view;
   final UserRepository _userRepository;
+  final ChatRepository _chatRepository; // New instance
   final auth.FirebaseAuth _firebaseAuth = auth.FirebaseAuth.instance;
-  app_user.User? _currentUser;
+  app_user.User? _userProfile;
+  final String _userId;
+  StreamSubscription? _userProfileSubscription; // New subscription
+  StreamSubscription? _relationshipSubscription; // New subscription
 
-  ProfilePresenter(this._view) : _userRepository = UserRepository();
+  ProfilePresenter(this._view, this._userId)
+      : _userRepository = UserRepository(),
+        _chatRepository = ChatRepository();
 
-  void loadUserProfile() async {
+  void loadUserProfile() {
     _view.showLoading();
-    String? uid = _firebaseAuth.currentUser?.uid;
-    if (uid != null) {
-      _currentUser = await _userRepository.getUser(uid);
-      if (_currentUser != null) {
-        _view.displayUserProfile(_currentUser!);
+    _userProfileSubscription = _userRepository.streamUserProfile(_userId).listen((user) {
+      if (user != null) {
+        _userProfile = user;
+        _view.displayUserProfile(_userProfile!); // Update the view with new data
+        _view.hideLoading();
       } else {
         _view.showMessage('User profile not found.');
+        _view.hideLoading();
       }
-    } else {
-      _view.showMessage('User not authenticated.');
-    }
-    _view.hideLoading();
+    });
   }
 
+  void dispose() {
+    _userProfileSubscription?.cancel();
+    _relationshipSubscription?.cancel(); // Cancel relationship subscription
+  }
+
+  void loadRelationship() async {
+    final currentUserId = _firebaseAuth.currentUser?.uid;
+    if (currentUserId == null) {
+      _view.showMessage('User not authenticated.');
+      return;
+    }
+    _relationshipSubscription = _chatRepository.streamRelationship(currentUserId, _userId).listen((relationship) {
+      _view.displayRelationship(relationship);
+    });
+  }
+
+  Future<void> updateRelationship(RelationshipType newType) async {
+    final currentUserId = _firebaseAuth.currentUser?.uid;
+    if (currentUserId == null) {
+      _view.showMessage('User not authenticated.');
+      return;
+    }
+    _view.showLoading();
+    try {
+      await _chatRepository.createOrUpdateRelationship(currentUserId, _userId, newType);
+      _view.showMessage('Relationship updated successfully!');
+    } catch (e) {
+      _view.showMessage('Failed to update relationship: $e');
+    } finally {
+      _view.hideLoading();
+    }
+  }
+
+
   Future<void> updateDisplayName(String newDisplayName) async {
-    if (_currentUser == null) {
+    if (_userProfile == null) {
       _view.showMessage('No user profile to update.');
       return;
     }
     _view.showLoading();
     try {
-      await _userRepository.updateDisplayName(_currentUser!.uid, newDisplayName);
-      _currentUser!.displayName = newDisplayName;
-      _view.displayUserProfile(_currentUser!); // Update the view with new data
+      await _userRepository.updateDisplayName(_userProfile!.uid, newDisplayName);
+      _userProfile!.displayName = newDisplayName;
+      _view.displayUserProfile(_userProfile!); // Update the view with new data
       _view.showMessage('Display name updated successfully!');
     } catch (e) {
       _view.showMessage('Failed to update display name: $e');
@@ -45,16 +86,16 @@ class ProfilePresenter {
   }
 
   Future<void> updateProfilePicture(String imagePath) async {
-    if (_currentUser == null) {
+    if (_userProfile == null) {
       _view.showMessage('No user profile to update.');
       return;
     }
     _view.showLoading();
     try {
-      String? downloadUrl = await _userRepository.uploadProfilePicture(_currentUser!.uid, imagePath);
+      String? downloadUrl = await _userRepository.uploadProfilePicture(_userProfile!.uid, imagePath);
       if (downloadUrl != null) {
-        _currentUser!.profilePictureUrl = downloadUrl;
-        _view.displayUserProfile(_currentUser!); // Update the view with new data
+        _userProfile!.profilePictureUrl = downloadUrl;
+        _view.displayUserProfile(_userProfile!); // Update the view with new data
         _view.showMessage('Profile picture updated successfully!');
       } else {
         _view.showMessage('Failed to upload profile picture.');
@@ -65,17 +106,15 @@ class ProfilePresenter {
     _view.hideLoading();
   }
 
-  app_user.User? get currentUser => _currentUser;
-
   Future<void> deleteAccount() async {
-    if (_currentUser == null) {
+    if (_userProfile == null) {
       _view.showMessage('No user logged in to delete.');
       return;
     }
     _view.showLoading();
     try {
       // This is where we will call the UserRepository to delete user data
-      await _userRepository.deleteUserAccount(_currentUser!.uid);
+      await _userRepository.deleteUserAccount(_userProfile!.uid);
 
       // Delete user from Firebase Authentication
       await _firebaseAuth.currentUser?.delete();

@@ -1,14 +1,18 @@
-import 'package:intl/intl.dart'; // New import for DateFormat
+import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/message.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/view/chat_view.dart';
-import 'package:my_chat_app/view/voice_message_player.dart'; // New import
-import 'package:my_chat_app/model/relationship.dart'; // Import for RelationshipExtension
-import 'package:image_picker/image_picker.dart'; // Import for ImageSource
-import 'package:my_chat_app/view/profile_screen.dart'; // Import for ProfileScreen
-import 'package:my_chat_app/view/profile_screen.dart'; // Import for ProfileScreen
+import 'package:my_chat_app/view/voice_message_player.dart';
+import 'package:my_chat_app/l10n/app_localizations.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:my_chat_app/view/profile_screen.dart';
+import 'package:my_chat_app/view/widgets/message_item.dart';
+import 'package:my_chat_app/services/local_storage_service.dart';
+import 'package:my_chat_app/services/notification_service.dart';
+import 'package:flutter/services.dart';
+import 'package:my_chat_app/services/sound_service.dart';
 
 class ChatScreen extends StatefulWidget {
   final Chat chat;
@@ -22,20 +26,38 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> implements ChatView {
   late ChatPresenter _presenter;
   final TextEditingController _messageController = TextEditingController();
+  final FocusNode _inputFocusNode = FocusNode();
   List<Message> _messages = [];
   bool _isLoading = false;
+  final LocalStorageService _localStorageService = LocalStorageService(); // New instance
+
+  // New emoji reactions list
+  final List<String> _emojiReactions = [
+    '🫂', // Hug
+    '💋', // Kiss
+    '❤️', // Heart
+    '😡', // Angry
+    '😂', // Laugh
+    '🌝', // Moon
+    '😀', // Generic emoji
+    '😒', // Unamused (added from previous session, ensure consistency)
+  ];
 
   @override
   void initState() {
     super.initState();
     _presenter = ChatPresenter(this, widget.chat);
     _presenter.loadMessages();
+    _presenter.markMessagesAsRead();
+    NotificationService.setActiveChatId(widget.chat.id);
   }
 
   @override
   void dispose() {
     _messageController.dispose();
+    _inputFocusNode.dispose();
     _presenter.dispose(); // Dispose the presenter
+    NotificationService.setActiveChatId(null);
     super.dispose();
   }
 
@@ -83,6 +105,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     _messageController.clear();
     _presenter.cancelReply(); // Clear reply state after sending
     _presenter.cancelEdit(); // Clear edit state after sending
+    _presenter.notifyTyping(false);
   }
 
   void _toggleRecording() async {
@@ -124,6 +147,58 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     );
   }
 
+  bool _isOnlyEmojis(String text) {
+    if (text.isEmpty) return false;
+    
+    // Check for Latin letters and numbers first (fast path)
+    if (RegExp(r'[a-zA-Z0-9]').hasMatch(text)) return false;
+
+    // Explicitly check for Arabic characters
+    if (RegExp(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]').hasMatch(text)) return false;
+    
+    // General Unicode Letter/Number check
+    try {
+      if (RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(text)) return false;
+    } catch (e) {
+      // Fallback if unicode property is not supported
+    }
+
+    // Only treat as emoji if short and no text detected
+    return text.runes.length <= 5; 
+  }
+
+  void _showReactionPicker(Message message) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
+          margin: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade900,
+            borderRadius: BorderRadius.circular(30),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: _emojiReactions.map((emoji) {
+              return GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  _presenter.addReaction(message.id, emoji);
+                },
+                child: Text(
+                  emoji,
+                  style: const TextStyle(fontSize: 32),
+                ),
+              );
+            }).toList(),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isCurrentUser = (senderId) => senderId == _presenter.currentUserId;
@@ -131,181 +206,246 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     final editingMessage = _presenter.selectedMessageForEdit;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.transparent, // Transparent for gradient background
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        titleSpacing: 0,
         title: GestureDetector(
           onTap: () {
-            // Navigate to user profile/info screen
-            // You'll need the other user's ID to pass to the ProfileScreen
-            // Assuming `widget.chat.otherUserId` exists or can be derived
             Navigator.of(context).push(
               MaterialPageRoute(
-                builder: (context) => ProfileScreen(userId: widget.chat.getOtherUserId(_presenter.currentUserId!)), // Placeholder other user ID
+                builder: (context) => ProfileScreen(userId: widget.chat.getOtherUserId(_presenter.currentUserId!)),
               ),
             );
           },
           child: Row(
             children: [
-              CircleAvatar(
-                radius: 18, // Smaller avatar for header
-                backgroundColor: Colors.blue.shade300, // Consistent background color
-                backgroundImage: widget.chat.otherUserProfilePictureUrl != null
-                    ? NetworkImage(widget.chat.otherUserProfilePictureUrl!)
-                    : null,
-                child: widget.chat.otherUserProfilePictureUrl == null
-                    ? Text(
-                        widget.chat.otherUserName.isNotEmpty ? widget.chat.otherUserName[0].toUpperCase() : '',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                      )
-                    : null,
+              FutureBuilder<int?>(
+                future: _localStorageService.getAvatarColor(widget.chat.getOtherUserId(_presenter.currentUserId!)),
+                builder: (context, snapshot) {
+                  Color avatarColor = Colors.blue.shade300;
+                  if (snapshot.hasData && snapshot.data != null) {
+                    avatarColor = Color(snapshot.data!);
+                  }
+                  return Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: avatarColor,
+                        backgroundImage: widget.chat.otherUserProfilePictureUrl != null
+                            ? NetworkImage(widget.chat.otherUserProfilePictureUrl!)
+                            : null,
+                        child: widget.chat.otherUserProfilePictureUrl == null
+                            ? Text(
+                                widget.chat.otherUserName.isNotEmpty ? widget.chat.otherUserName[0].toUpperCase() : '',
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                              )
+                            : null,
+                      ),
+                      if (widget.chat.otherUserIsOnline)
+                        Positioned(
+                          bottom: 0,
+                          right: 0,
+                          child: Container(
+                            width: 12,
+                            height: 12,
+                            decoration: BoxDecoration(
+                              color: Colors.greenAccent,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: Colors.black, width: 2),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               ),
-              const SizedBox(width: 20),
-              Text(widget.chat.otherUserName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.chat.otherUserName,
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  if (_presenter.otherUserTyping)
+                    Text(
+                      AppLocalizations.of(context).translate('typing'),
+                      style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    )
+                  else
+                    Text(
+                      widget.chat.otherUserIsOnline ? 'Active Now' : _formatLastSeen(widget.chat.otherUserLastSeen ?? DateTime.now()),
+                      style: const TextStyle(fontSize: 12, color: Colors.white70),
+                    ),
+                ],
+              ),
             ],
           ),
         ),
-        backgroundColor: Colors.grey.shade800,
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : ListView.builder(
-                    reverse: true,
-                    itemCount: _messages.length,
-                    itemBuilder: (context, index) {
-                      final message = _messages[index];
-                      return GestureDetector(
-                        onLongPress: () => _showMessageActions(message),
-                        child: Align(
-                          alignment: isCurrentUser(message.senderId) ? Alignment.centerRight : Alignment.centerLeft,
-                          child: Column(
-                            crossAxisAlignment: isCurrentUser(message.senderId) ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                            children: [
-                              if (message.replyToMessageId != null)
-                                _buildReplyPreview(message.replyToMessageId!),
-                              Row(
-                                mainAxisAlignment: isCurrentUser(message.senderId) ? MainAxisAlignment.end : MainAxisAlignment.start,
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  if (!isCurrentUser(message.senderId))
-                                    _buildMessageAvatar(message.senderId, isCurrentUser(message.senderId), widget.chat.otherUserProfilePictureUrl),
-                                  Expanded(
-                                    child: Container(
-                                      margin: EdgeInsets.only(
-                                        left: isCurrentUser(message.senderId) ? 200.0 : 8.0, // Indent incoming messages
-                                        right: isCurrentUser(message.senderId) ? 8.0 : 200.0, // Indent outgoing messages
-                                        top: 4.0,
-                                        bottom: 4.0,
-                                      ),
-                                      padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 10.0), // Consistent padding
-                                      decoration: BoxDecoration(
-                                        color: isCurrentUser(message.senderId)
-                                            ? Colors.blue.shade200 // Blue for outgoing
-                                            : Colors.grey.shade300, // Light gray for incoming
-                                        borderRadius: BorderRadius.only(
-                                          topLeft: const Radius.circular(12.0),
-                                          topRight: const Radius.circular(12.0),
-                                          bottomLeft: Radius.circular(isCurrentUser(message.senderId) ? 12.0 : 4.0),
-                                          bottomRight: Radius.circular(isCurrentUser(message.senderId) ? 4.0 : 12.0),
-                                        ), // Modern rounded corners
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment: isCurrentUser(message.senderId) ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                        children: [
-                                          if (message.type == MessageType.text)
-                                            Text(
-                                              message.editedContent ?? message.content,
-                                              style: TextStyle(color: isCurrentUser(message.senderId) ? Colors.white : Colors.black87), // Adjust text color based on bubble color
-                                            ),
-                                          if (message.type == MessageType.image)
-                                            Image.network(message.content, width: 200),
-                                          if (message.type == MessageType.voice)
-                                            VoiceMessagePlayer(
-                                              audioUrl: message.content,
-                                              backgroundColor: isCurrentUser(message.senderId) ? Colors.blue.shade600 : Colors.grey.shade300, // Match bubble color
-                                              textColor: isCurrentUser(message.senderId) ? Colors.white : Colors.black87,
-                                            ),
-                                          const SizedBox(height: 4.0),
-                                          Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (isCurrentUser(message.senderId)) // Only show status for outgoing messages
-                                                _buildMessageStatusWidget(message, isCurrentUser(message.senderId)),
-                                              const SizedBox(width: 4), // Spacing between status and timestamp
-                                              Text(
-                                                _formatMessageTimestamp(message.timestamp),
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: isCurrentUser(message.senderId) ? Colors.white70 : Colors.black54,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          if (message.reactions.isNotEmpty)
-                                            _buildReactions(message.reactions),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.call, color: Colors.purpleAccent),
+            onPressed: () {}, // Implement call action
           ),
-          if (replyingTo != null)
-            _buildActiveReplyPreview(replyingTo),
-          if (editingMessage != null)
-            _buildActiveEditIndicator(editingMessage),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: Icon(_presenter.isRecording ? Icons.stop : Icons.mic),
-                  color: _presenter.isRecording ? Colors.red : null,
-                  onPressed: _toggleRecording,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.image),
-                  onPressed: _showImageSourceSelection,
-                ),
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: editingMessage != null
-                          ? 'Edit message...'
-                          : (_presenter.isRecording ? 'Recording voice...' : 'Type a message...'),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20.0),
-                      ),
-                      suffixIcon: editingMessage != null
-                          ? IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () {
-                                _presenter.cancelEdit();
-                                _messageController.clear();
-                              },
-                            )
-                          : null,
-                    ),
-                    readOnly: _presenter.isRecording, // Disable typing while recording
-                  ),
-                ),
-                const SizedBox(width: 8.0),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: _sendMessage,
-                ),
-              ],
-            ),
+          IconButton(
+            icon: const Icon(Icons.videocam, color: Colors.purpleAccent),
+            onPressed: () {}, // Implement video call action
+          ),
+          IconButton(
+            icon: const Icon(Icons.info, color: Colors.purpleAccent),
+            onPressed: () {}, // Implement chat info
           ),
         ],
+      ),
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          FocusManager.instance.primaryFocus?.unfocus();
+          SystemChannels.textInput.invokeMethod('TextInput.hide');
+        },
+        child: Container(
+        color: const Color(0xFF121212), // Solid dark background
+        child: Column(
+          children: [
+            // Spacer for AppBar since extendBodyBehindAppBar is true
+            SizedBox(height: kToolbarHeight + MediaQuery.of(context).padding.top),
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: Colors.white))
+                  : ListView.separated(
+                      reverse: true,
+                      itemCount: _messages.length,
+                      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                      // Optimization: Use a separate widget for items to prevent full list rebuilds
+                      itemBuilder: (context, index) {
+                        final message = _messages[index];
+                        final bool isMe = isCurrentUser(message.senderId);
+                        final bool showAvatar = !isMe && (index == 0 || _messages[index - 1].senderId != message.senderId);
+
+                        return MessageItem(
+                          key: ValueKey(message.id), // Key helps flutter reuse widgets efficiently
+                          message: message,
+                          isMe: isMe,
+                          showAvatar: showAvatar,
+                          otherUserProfilePictureUrl: widget.chat.otherUserProfilePictureUrl,
+                          otherUserName: widget.chat.otherUserName,
+                          isOnlyEmojis: _isOnlyEmojis(message.content) && message.type == MessageType.text,
+                          onLongPress: _showReactionPicker,
+                          buildReplyPreview: _buildReplyPreview,
+                          buildReactions: _buildReactions,
+                          buildMessageStatus: _buildMessageStatusWidget,
+                        );
+                      },
+                      separatorBuilder: (context, index) => const SizedBox(height: 10),
+                    ),
+            ),
+            if (replyingTo != null)
+              _buildActiveReplyPreview(replyingTo),
+            if (editingMessage != null)
+              _buildActiveEditIndicator(editingMessage),
+            _buildInputArea(),
+          ],
+        ),
+      ),
+    ),
+    );
+  }
+
+  Widget _buildInputArea() {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
+        top: false,
+        bottom: true,
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.image, color: Colors.pinkAccent, size: 28),
+              onPressed: _showImageSourceSelection,
+            ),
+            IconButton(
+              icon: const Icon(Icons.mic, color: Colors.pinkAccent, size: 28),
+              onPressed: _toggleRecording,
+            ),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade800,
+                  borderRadius: BorderRadius.circular(24.0),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        focusNode: _inputFocusNode,
+                        style: const TextStyle(color: Colors.white),
+                        scrollPadding: EdgeInsets.zero,
+                        enableSuggestions: false,
+                        smartDashesType: SmartDashesType.disabled,
+                        smartQuotesType: SmartQuotesType.disabled,
+                        textInputAction: TextInputAction.send,
+                        decoration: InputDecoration(
+                          hintText: 'Message',
+                          hintStyle: TextStyle(color: Colors.grey.shade400),
+                          border: InputBorder.none,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                        ),
+                        onTap: () {
+                          SystemChannels.textInput.invokeMethod('TextInput.show');
+                        },
+                        onChanged: (text) {
+                          _presenter.notifyTyping(text.isNotEmpty);
+                          // Removed setState to prevent full screen rebuilds on every keystroke
+                        },
+                        onSubmitted: (_) {
+                          if (_messageController.text.trim().isNotEmpty) {
+                            _sendMessage();
+                          }
+                        },
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sentiment_satisfied_alt, color: Colors.pinkAccent),
+                      onPressed: () {}, // Emoji picker
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Optimized to rebuild only the button when text changes
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _messageController,
+              builder: (context, value, child) {
+                final hasText = value.text.trim().isNotEmpty;
+                return IconButton(
+                  icon: hasText 
+      ? const Icon(
+          Icons.send, 
+          color: Colors.pinkAccent, 
+          size: 28,
+        ) 
+      : const Text(
+          '🌝', 
+          style: TextStyle(
+            fontSize: 28, // Matches the icon size
+          ),
+        ),
+                  onPressed: hasText 
+                      ? _sendMessage 
+                      : () => _presenter.sendTextMessage("🌝"),
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -370,49 +510,80 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   }
 
   Widget _buildReactions(Map<String, String> reactions) {
+    if (reactions.isEmpty) return const SizedBox.shrink();
     return Container(
-      padding: const EdgeInsets.all(4.0),
+      padding: const EdgeInsets.symmetric(horizontal: 2.0, vertical: 2.0),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.7),
-        borderRadius: BorderRadius.circular(10.0),
+        color: const Color(0xFF303030), // Dark grey background for reactions
+        borderRadius: BorderRadius.circular(20.0),
+        border: Border.all(color: Colors.transparent),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.transparent.withOpacity(0.5),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
-        children: reactions.values.map((emoji) => Text(emoji, style: const TextStyle(fontSize: 16))).toList(),
+        children: reactions.values.map((emoji) => Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2.0),
+          child: Text(emoji, style: const TextStyle(fontSize: 14)),
+        )).toList(),
       ),
     );
   }
-
 
   Widget _buildReplyPreview(String replyToMessageId) {
     final repliedMessage = _presenter.getMessageById(replyToMessageId);
     if (repliedMessage == null) return const SizedBox.shrink();
+    
+    final isMe = repliedMessage.senderId == _presenter.currentUserId;
+    final senderName = isMe ? 'You' : widget.chat.otherUserName;
+
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
-      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+      margin: const EdgeInsets.only(bottom: 4.0),
+      padding: const EdgeInsets.all(8.0),
       decoration: BoxDecoration(
-        color: Colors.grey.shade300,
+        color: Colors.black.withOpacity(0.2),
         borderRadius: BorderRadius.circular(8.0),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Replying to: ${repliedMessage.senderId == _presenter.currentUserId ? 'You' : widget.chat.otherUserName}',
-            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.blueGrey)),
-          Text(repliedMessage.type == MessageType.text ? repliedMessage.content : '[${repliedMessage.type.name} message]',
-            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.green)),
+          Text(
+            'Replying to $senderName',
+            style: TextStyle(
+              fontSize: 10,
+              color: Colors.white.withOpacity(0.8),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            repliedMessage.type == MessageType.text 
+                ? repliedMessage.content 
+                : (repliedMessage.type == MessageType.image ? '📷 Photo' : '🎤 Voice Message'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.white.withOpacity(0.6),
+            ),
+          ),
         ],
       ),
     );
   }
-
+  
   Widget _buildActiveReplyPreview(Message message) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
       decoration: BoxDecoration(
-        color: Theme.of(context).primaryColor.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12.0),
+        color: const Color(0xFF2C2C2C), // Dark background for active reply
+        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
       ),
       child: Row(
         children: [
@@ -420,15 +591,21 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Replying to: ${message.senderId == _presenter.currentUserId ? 'You' : widget.chat.otherUserName}',
-                  style: TextStyle(fontSize: 12, color: Theme.of(context).primaryColor, fontWeight: FontWeight.bold)),
-                Text(message.type == MessageType.text ? message.content : '[${message.type.name} message]',
-                  style: const TextStyle(fontSize: 14)),
+                Text(
+                  'Replying to ${message.senderId == _presenter.currentUserId ? 'You' : widget.chat.otherUserName}',
+                  style: const TextStyle(fontSize: 12, color: Colors.pinkAccent, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  message.type == MessageType.text ? message.content : '[${message.type.name} message]',
+                  style: const TextStyle(fontSize: 14, color: Colors.white70),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ],
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.close),
+            icon: const Icon(Icons.close, color: Colors.white54),
             onPressed: () {
               _presenter.cancelReply();
             },
@@ -441,18 +618,15 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   Widget _buildActiveEditIndicator(Message message) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-      margin: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-      decoration: BoxDecoration(
-        color: Colors.orange.shade100,
-        borderRadius: BorderRadius.circular(12.0),
-      ),
+      color: Colors.blue.withOpacity(0.1),
       child: Row(
         children: [
-          const Expanded(
-            child: Text('Editing message...', style: TextStyle(fontSize: 12, color: Colors.orange, fontWeight: FontWeight.bold)),
-          ),
+          const Icon(Icons.edit, size: 16, color: Colors.blue),
+          const SizedBox(width: 8),
+          const Text('Editing message', style: TextStyle(color: Colors.blue)),
+          const Spacer(),
           IconButton(
-            icon: const Icon(Icons.close),
+            icon: const Icon(Icons.close, size: 16),
             onPressed: () {
               _presenter.cancelEdit();
               _messageController.clear();
@@ -463,100 +637,20 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     );
   }
 
-  void _showMessageActions(Message message) {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.reply),
-                title: const Text('Reply'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _startReply(message);
-                },
-              ),
-              if (message.type == MessageType.text && message.senderId == _presenter.currentUserId)
-                ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text('Edit'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _startEdit(message);
-                  },
-                ),
-              ListTile(
-                leading: const Icon(Icons.emoji_emotions),
-                title: const Text('React'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showEmojiPicker(message);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _startReply(Message message) {
-    _presenter.selectMessageForReply(message);
-    // Focus the text field
-    FocusScope.of(context).requestFocus(FocusNode());
-  }
-
-  void _startEdit(Message message) {
-    _presenter.selectMessageForEdit(message);
-    _messageController.text = message.content;
-    // Focus the text field and place cursor at the end
-    _messageController.selection = TextSelection.fromPosition(TextPosition(offset: _messageController.text.length));
-    FocusScope.of(context).requestFocus(FocusNode());
-  }
-
-  void _showEmojiPicker(Message message) {
-    // TODO: Implement emoji picker and reaction logic
-    showMessage('Showing emoji picker for: ${message.content}');
-    _presenter.addReaction(message.id, '❤️'); // Placeholder reaction
-  }
-
-  Widget _buildMessageAvatar(String senderId, bool isCurrentUser, String? otherUserProfilePictureUrl) {
-    if (isCurrentUser) {
-      // Optionally show current user's avatar, or an empty SizedBox for alignment
-      return const SizedBox(width: 30); // Placeholder for alignment
-    }
-    return CircleAvatar(
-      radius: 15,
-      backgroundColor: Colors.blue.shade300,
-      backgroundImage: otherUserProfilePictureUrl != null
-          ? NetworkImage(otherUserProfilePictureUrl)
-          : null,
-      child: otherUserProfilePictureUrl == null
-          ? Text(
-              widget.chat.otherUserName.isNotEmpty ? widget.chat.otherUserName[0].toUpperCase() : '',
-              style: const TextStyle(color: Colors.white, fontSize: 12),
-            )
-          : null,
-    );
-  }
-
-  String _formatMessageTimestamp(DateTime timestamp) {
+  String _formatLastSeen(DateTime lastSeen) {
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = DateTime(now.year, now.month, now.day - 1);
-    final messageDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
+    final difference = now.difference(lastSeen);
 
-    if (messageDate.isAtSameMomentAs(today)) {
-      return DateFormat('HH:mm').format(timestamp.toLocal()); // E.g., '14:30'
-    } else if (messageDate.isAtSameMomentAs(yesterday)) {
-      return 'Yesterday, ${DateFormat('HH:mm').format(timestamp.toLocal())}';
-    } else if (now.difference(messageDate).inDays < 7) {
-      return DateFormat('EEE, HH:mm').format(timestamp.toLocal()); // E.g., 'Mon, 14:30'
+    if (difference.inMinutes < 1) {
+      return 'Last seen just now';
+    } else if (difference.inMinutes < 60) {
+      return 'Last seen ${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return 'Last seen ${difference.inHours}h ago';
     } else {
-      return DateFormat('dd/MM/yyyy, HH:mm').format(timestamp.toLocal()); // E.g., '01/01/2026, 14:30'
+      return 'Last seen ${DateFormat('MMM d, h:mm a').format(lastSeen)}';
     }
   }
 }
+
+

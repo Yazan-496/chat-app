@@ -28,6 +28,9 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
     if (_presenter.lastLoggedInEmail != null) {
       _usernameController.text = _presenter.lastLoggedInEmail!;
     }
+    if (_presenter.lastLoggedInPassword != null) {
+      _passwordController.text = _presenter.lastLoggedInPassword!;
+    }
     setState(() {}); // Refresh UI with loaded data
   }
 

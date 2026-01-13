@@ -1,6 +1,9 @@
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
 
+import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
+
 class Chat {
   final String id;
   final List<String> participantIds;
@@ -11,6 +14,8 @@ class Chat {
   final String? lastMessageContent;
   final String? lastMessageSenderId; // New field
   final MessageStatus? lastMessageStatus; // New field
+  bool otherUserIsOnline;
+  DateTime? otherUserLastSeen;
 
   String getOtherUserId(String currentUserId) {
     return participantIds.firstWhere((id) => id != currentUserId);
@@ -24,8 +29,10 @@ class Chat {
     required this.relationshipType,
     required this.lastMessageTime,
     this.lastMessageContent,
-    this.lastMessageSenderId, // Add to constructor
-    this.lastMessageStatus, // Add to constructor
+    this.lastMessageSenderId,
+    this.lastMessageStatus,
+    this.otherUserIsOnline = false,
+    this.otherUserLastSeen,
   });
 
   factory Chat.fromMap(Map<String, dynamic> data) {
@@ -38,10 +45,12 @@ class Chat {
           (e) => e.toString() == 'RelationshipType.' + (data['relationshipType'] as String)),
       lastMessageTime: DateTime.parse(data['lastMessageTime'] as String),
       lastMessageContent: data['lastMessageContent'] as String?,
-      lastMessageSenderId: data['lastMessageSenderId'] as String?, // Retrieve from map
+      lastMessageSenderId: data['lastMessageSenderId'] as String?,
       lastMessageStatus: data['lastMessageStatus'] != null
           ? MessageStatus.values.firstWhere((e) => e.toString().split('.').last == data['lastMessageStatus'])
-          : null, // Retrieve and parse status
+          : null,
+      otherUserIsOnline: data['otherUserIsOnline'] as bool? ?? false,
+      otherUserLastSeen: (data['otherUserLastSeen'] as String?) != null ? DateTime.parse(data['otherUserLastSeen'] as String) : null,
     );
   }
 
@@ -54,8 +63,39 @@ class Chat {
       'relationshipType': relationshipType.name,
       'lastMessageTime': lastMessageTime.toIso8601String(),
       'lastMessageContent': lastMessageContent,
-      'lastMessageSenderId': lastMessageSenderId, // Add to map
-      'lastMessageStatus': lastMessageStatus?.toString().split('.').last, // Add to map
+      'lastMessageSenderId': lastMessageSenderId,
+      'lastMessageStatus': lastMessageStatus?.toString().split('.').last,
+      'otherUserIsOnline': otherUserIsOnline,
+      'otherUserLastSeen': otherUserLastSeen?.toIso8601String(),
     };
+  }
+
+  // Method to create a copy of the Chat object with updated fields
+  Chat copyWith({
+    String? id,
+    List<String>? participantIds,
+    String? otherUserName,
+    String? otherUserProfilePictureUrl,
+    RelationshipType? relationshipType,
+    DateTime? lastMessageTime,
+    String? lastMessageContent,
+    String? lastMessageSenderId,
+    MessageStatus? lastMessageStatus,
+    bool? otherUserIsOnline,
+    DateTime? otherUserLastSeen,
+  }) {
+    return Chat(
+      id: id ?? this.id,
+      participantIds: participantIds ?? this.participantIds,
+      otherUserName: otherUserName ?? this.otherUserName,
+      otherUserProfilePictureUrl: otherUserProfilePictureUrl ?? this.otherUserProfilePictureUrl,
+      relationshipType: relationshipType ?? this.relationshipType,
+      lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+      lastMessageContent: lastMessageContent ?? this.lastMessageContent,
+      lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
+      lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus,
+      otherUserIsOnline: otherUserIsOnline ?? this.otherUserIsOnline,
+      otherUserLastSeen: otherUserLastSeen ?? this.otherUserLastSeen,
+    );
   }
 }

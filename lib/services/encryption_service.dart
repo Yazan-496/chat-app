@@ -1,20 +1,71 @@
 import 'dart:convert';
-import 'package:encrypt/encrypt.dart' as encrypt;
 
+/// Simple and lightweight encryption service for basic text obfuscation.
+/// Uses XOR cipher with a fixed constant key - no initialization required.
 class EncryptionService {
-  // For a real-world app, manage keys securely. This is a simplified example.
-  // You might derive a key from user's password or use a key exchange protocol.
-  static final _key = encrypt.Key.fromBase64('MThlMTk0ZTc3ZGUxMzcwMDI3ZGMwNzI1NjJlNjE0YjI='); // Fixed 256-bit key from base64
-  static final _iv = encrypt.IV.fromBase64('MjM0ODcwYmE5NGRjMjNiNg=='); // Fixed 128-bit IV from base64
-  static final _encrypter = encrypt.Encrypter(encrypt.AES(_key));
+  static final EncryptionService _instance = EncryptionService._internal();
+  factory EncryptionService() => _instance;
+  EncryptionService._internal();
 
+  // Fixed constant key for obfuscation (not strong security)
+  static const String _key = 'MySecretKey2024';
+
+  /// Encrypts text using simple XOR cipher with the fixed key.
   String encryptText(String plainText) {
-    final encrypted = _encrypter.encrypt(plainText, iv: _iv);
-    return encrypted.base64;
+    if (plainText.isEmpty) return plainText;
+    
+    final keyBytes = utf8.encode(_key);
+    final textBytes = utf8.encode(plainText);
+    final result = <int>[];
+    
+    for (int i = 0; i < textBytes.length; i++) {
+      result.add(textBytes[i] ^ keyBytes[i % keyBytes.length]);
+    }
+    
+    // Convert to base64 for safe string storage
+    return base64Encode(result);
   }
 
+  /// Decrypts text using simple XOR cipher with the fixed key.
   String decryptText(String encryptedText) {
-    final decrypted = _encrypter.decrypt(encrypt.Encrypted.fromBase64(encryptedText), iv: _iv);
-    return decrypted;
+    if (encryptedText.isEmpty) return encryptedText;
+    
+    try {
+      final encryptedBytes = base64Decode(encryptedText);
+      final keyBytes = utf8.encode(_key);
+      final result = <int>[];
+      
+      for (int i = 0; i < encryptedBytes.length; i++) {
+        result.add(encryptedBytes[i] ^ keyBytes[i % keyBytes.length]);
+      }
+      
+      return utf8.decode(result);
+    } catch (e) {
+      // If base64 decode fails or utf8 decode fails, try old format
+      try {
+        // Try interpreting as legacy base64 encoded string (using codeUnits/fromCharCodes)
+        final encryptedBytes = base64Decode(encryptedText);
+        final keyBytes = _key.codeUnits;
+        final result = <int>[];
+        for (int i = 0; i < encryptedBytes.length; i++) {
+          result.add(encryptedBytes[i] ^ keyBytes[i % keyBytes.length]);
+        }
+        return String.fromCharCodes(result);
+      } catch (_) {
+         // Final fallback: direct XOR without base64 (as seen in original code's catch block)
+        final keyBytes = _key.codeUnits;
+        final textBytes = encryptedText.codeUnits;
+        final result = <int>[];
+        
+        for (int i = 0; i < textBytes.length; i++) {
+          result.add(textBytes[i] ^ keyBytes[i % keyBytes.length]);
+        }
+        
+        return String.fromCharCodes(result);
+      }
+    }
   }
+
+  /// Always initialized (no setup needed).
+  bool get isInitialized => true;
 }

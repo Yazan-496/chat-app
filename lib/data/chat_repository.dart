@@ -1,17 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:my_chat_app/model/user.dart';
 import 'package:my_chat_app/data/user_repository.dart';
+import 'package:my_chat_app/model/relationship.dart'; // Ensure Relationship is imported
 import 'package:my_chat_app/model/message.dart';
-import 'dart:io';
+// dart:io and firebase_storage removed because not used in this repository file
 import 'package:collection/collection.dart'; // For firstWhereOrNull
 
 /// Repository for managing chat and message data in Firestore.
 /// It handles all interactions with the 'chats' and 'messages' collections.
 class ChatRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final CollectionReference _relationshipsCollection = FirebaseFirestore.instance.collection('relationships');
   final UserRepository _userRepository = UserRepository();
 
   /// Retrieves a single chat by its ID.
@@ -56,7 +57,7 @@ class ChatRepository {
             otherUserName: otherUser.username,
             otherUserProfilePictureUrl: otherUser.profilePictureUrl,
             relationshipType: RelationshipType.values.firstWhereOrNull(
-                (e) => e.toString() == 'RelationshipType.' + (chatData['relationshipType'] as String)) ?? RelationshipType.closeFriend,
+                (e) => e.toString() == 'RelationshipType.' + (chatData['relationshipType'] as String)) ?? RelationshipType.friend,
             lastMessageTime: DateTime.parse(chatData['lastMessageTime'] as String),
             lastMessageContent: chatData['lastMessageContent'] as String?,
           ));
@@ -71,6 +72,11 @@ class ChatRepository {
   String _generateChatId(String userId1, String userId2) {
     List<String> userIds = [userId1, userId2]..sort();
     return userIds.join('_');
+  }
+
+  /// Returns a stream of the chat document snapshots for the given chatId.
+  Stream<DocumentSnapshot> getChatDocStream(String chatId) {
+    return _firestore.collection('chats').doc(chatId).snapshots();
   }
 
   /// Creates a new chat between two users if it doesn't already exist.
@@ -115,6 +121,18 @@ class ChatRepository {
       'lastMessageSenderId': message.senderId, // Update with sender ID
       'lastMessageStatus': message.status.toString().split('.').last, // Update with message status
     });
+  }
+
+  /// Sets typing status for a given user in a chat.
+  Future<void> setTypingStatus(String chatId, String userId, bool isTyping) async {
+    try {
+      final chatRef = _firestore.collection('chats').doc(chatId);
+      await chatRef.set({
+        'typing': {userId: isTyping}
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('ChatRepository: Failed to set typing status for $userId in $chatId: $e');
+    }
   }
 
   /// Retrieves a stream of messages for a given chat.
@@ -190,5 +208,42 @@ class ChatRepository {
     // Then delete the chat document itself
     await chatRef.delete();
     print('ChatRepository: Deleted chat document $chatId');
+  }
+
+  /// Creates or updates a relationship between two users.
+  Future<void> createOrUpdateRelationship(String user1Id, String user2Id, RelationshipType type) async {
+    final relationshipId = _generateChatId(user1Id, user2Id); // Re-using chat ID generation for relationship ID
+    final relationshipRef = _relationshipsCollection.doc(relationshipId);
+
+    final relationship = Relationship(
+      id: relationshipId,
+      userId1: user1Id,
+      userId2: user2Id,
+      type: type,
+      createdAt: DateTime.now(),
+    );
+
+    await relationshipRef.set(relationship.toMap(), SetOptions(merge: true));
+  }
+
+  /// Retrieves a specific relationship between two users.
+  Future<Relationship?> getRelationship(String user1Id, String user2Id) async {
+    final relationshipId = _generateChatId(user1Id, user2Id);
+    final doc = await _relationshipsCollection.doc(relationshipId).get();
+    if (doc.exists) {
+      return Relationship.fromMap(doc.data() as Map<String, dynamic>);
+    }
+    return null;
+  }
+
+  /// Retrieves a stream of a specific relationship between two users.
+  Stream<Relationship?> streamRelationship(String user1Id, String user2Id) {
+    final relationshipId = _generateChatId(user1Id, user2Id);
+    return _relationshipsCollection.doc(relationshipId).snapshots().map((snapshot) {
+      if (snapshot.exists) {
+        return Relationship.fromMap(snapshot.data() as Map<String, dynamic>);
+      }
+      return null;
+    });
   }
 }

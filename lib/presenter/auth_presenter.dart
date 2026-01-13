@@ -14,15 +14,18 @@ class AuthPresenter {
 
   List<app_user.User> _recentUsers = [];
   String? _lastLoggedInEmail;
+  String? _lastLoggedInPassword;
 
   AuthPresenter(this._view);
 
   List<app_user.User> get recentUsers => _recentUsers;
   String? get lastLoggedInEmail => _lastLoggedInEmail;
+  String? get lastLoggedInPassword => _lastLoggedInPassword;
 
-  // Method to load last email and recent user UIDs
+  // Method to load last email, password, and recent user UIDs
   Future<void> loadRecentUsers() async {
     _lastLoggedInEmail = await _localStorageService.getLastEmail();
+    _lastLoggedInPassword = await _localStorageService.getLastPassword();
     final recentUids = await _localStorageService.getRecentUids();
     _recentUsers = [];
     for (final uid in recentUids) {
@@ -50,7 +53,8 @@ class AuthPresenter {
       // Save credentials locally
       final user = _firebaseAuth.currentUser;
       if (user != null) {
-        await _localStorageService.saveLastEmail(username); // Assuming username is email
+        await _localStorageService.saveLastEmail(username);
+        await _localStorageService.saveLastPassword(password);
         await _localStorageService.addRecentUid(user.uid);
         await loadRecentUsers(); // Refresh recent users list
       }
@@ -70,7 +74,8 @@ class AuthPresenter {
       // Save credentials locally
       final user = _firebaseAuth.currentUser;
       if (user != null) {
-        await _localStorageService.saveLastEmail(username); // Assuming username is email
+        await _localStorageService.saveLastEmail(username);
+        await _localStorageService.saveLastPassword(password);
         await _localStorageService.addRecentUid(user.uid);
         await loadRecentUsers(); // Refresh recent users list
       }

@@ -1,4 +1,3 @@
-import 'package:my_chat_app/utils/app_theme.dart';
 import 'package:my_chat_app/model/chat.dart';
 
 abstract class HomeView {

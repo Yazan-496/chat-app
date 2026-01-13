@@ -39,4 +39,8 @@ class SettingsPresenter {
     }
     _view.updateView();
   }
+
+  void updateView() {
+    _view.updateView();
+  }
 }

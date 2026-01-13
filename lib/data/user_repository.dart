@@ -122,4 +122,34 @@ class UserRepository {
     // especially if you allow multiple uploads. For now, skipping for simplicity.
     // In a real app, you might use a Cloud Function triggered by user deletion.
   }
+
+  /// Updates a user's online status and last seen timestamp.
+  Future<void> updateUserStatus(String uid, {required bool isOnline}) async {
+    await _firestore.collection('users').doc(uid).update({
+      'isOnline': isOnline,
+      'lastSeen': FieldValue.serverTimestamp(), // Firestore takes care of server-side timestamp
+    });
+  }
+
+  /// Retrieves a stream of a specific user's online status and last seen data.
+  Stream<model.User?> streamUserStatus(String uid) {
+    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
+      if (snapshot.exists) {
+        return model.User.fromMap(snapshot.data()!);
+      } else {
+        return null;
+      }
+    });
+  }
+
+  /// Retrieves a stream of a specific user's complete profile data.
+  Stream<model.User?> streamUserProfile(String uid) {
+    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
+      if (snapshot.exists) {
+        return model.User.fromMap(snapshot.data()!);
+      } else {
+        return null;
+      }
+    });
+  }
 }
