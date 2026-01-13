@@ -98,8 +98,35 @@ class HomePresenter {
       loadChats();
     } catch (e) {
       _view.showMessage('Failed to delete chat: $e');
-    } finally {
       _view.hideLoading();
+    }
+  }
+
+  Future<Chat?> getChat(String chatId) async {
+    final currentUserId = _firebaseAuth.currentUser?.uid;
+    if (currentUserId == null) return null;
+
+    try {
+      final chatDoc = await _chatRepository.getChatById(chatId);
+      if (chatDoc == null) return null;
+
+      final participantIds = chatDoc.participantIds;
+      final otherUserId = participantIds.firstWhere((id) => id != currentUserId, orElse: () => '');
+      if (otherUserId.isEmpty) return chatDoc;
+
+      final otherUser = await _userRepository.getUser(otherUserId);
+      if (otherUser != null) {
+        return chatDoc.copyWith(
+          otherUserName: otherUser.username,
+          otherUserProfilePictureUrl: otherUser.profilePictureUrl,
+          otherUserIsOnline: otherUser.isOnline,
+          otherUserLastSeen: otherUser.lastSeen,
+        );
+      }
+      return chatDoc;
+    } catch (e) {
+      print('Error fetching single chat: $e');
+      return null;
     }
   }
 }

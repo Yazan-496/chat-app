@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:system_alert_window/system_alert_window.dart';
+import 'package:my_chat_app/services/notification_service.dart';
 
 class BubbleService {
   static final BubbleService instance = BubbleService._internal();
@@ -29,13 +30,14 @@ class BubbleService {
     return granted == true;
   }
 
-  Future<bool> start({required String chatId, String? title, String? body}) async {
+  Future<bool> start({required String chatId, String? title, String? body, String? profilePicUrl}) async {
     try {
       // Try native bubbles first
       await _channel.invokeMethod('showBubble', {
         'chatId': chatId,
         'title': title ?? 'Chat',
         'body': body ?? 'New message',
+        'profilePicUrl': profilePicUrl,
       });
       return true;
     } catch (e) {
@@ -44,8 +46,14 @@ class BubbleService {
       final ok = await ensurePermissions();
       if (!ok) return false;
       
-      SystemAlertWindow.registerOnClickListener(bubbleBackgroundCallback);
-      
+      // Send data to overlay before showing
+      await SystemAlertWindow.sendMessageToOverlay({
+        'chatId': chatId,
+        'title': title,
+        'body': body,
+        'profilePicUrl': profilePicUrl,
+      });
+
       await SystemAlertWindow.showSystemWindow(
         notificationTitle: title ?? 'New Message',
         notificationBody: body ?? 'Tap to view',

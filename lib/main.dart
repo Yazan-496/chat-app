@@ -13,6 +13,7 @@ import 'package:my_chat_app/services/presence_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
+import 'package:system_alert_window/system_alert_window.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -34,15 +35,138 @@ void main() async {
 void overlayMain() {
   runApp(const MaterialApp(
     debugShowCheckedModeBanner: false,
-    home: Material(
+    home: BubbleOverlay(),
+  ));
+}
+
+class BubbleOverlay extends StatefulWidget {
+  const BubbleOverlay({super.key});
+
+  @override
+  State<BubbleOverlay> createState() => _BubbleOverlayState();
+}
+
+class _BubbleOverlayState extends State<BubbleOverlay> {
+  String _title = 'New Message';
+  String _body = 'Tap to open chat';
+  String? _chatId;
+  String? _profilePicUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    SystemAlertWindow.overlayListener.listen((event) {
+      if (event is Map) {
+        setState(() {
+          _title = event['title'] ?? _title;
+          _body = event['body'] ?? _body;
+          _chatId = event['chatId'];
+          _profilePicUrl = event['profilePicUrl'];
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
       child: Center(
-        child: Text(
-          'Chat Bubble',
-          style: TextStyle(fontSize: 18),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E1E1E),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.5),
+                blurRadius: 10,
+                spreadRadius: 2,
+              ),
+            ],
+            border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 22,
+                    backgroundColor: Colors.blueAccent,
+                    backgroundImage: _profilePicUrl != null && _profilePicUrl!.isNotEmpty
+                        ? NetworkImage(_profilePicUrl!)
+                        : null,
+                    child: _profilePicUrl == null || _profilePicUrl!.isEmpty
+                        ? const Icon(Icons.person, color: Colors.white, size: 24)
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          _body,
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                            fontSize: 14,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                    onPressed: () => SystemAlertWindow.closeSystemWindow(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: () async {
+                    if (_chatId != null) {
+                      // We can't navigate directly from here, so we tell the main isolate
+                      // However, SystemAlertWindow 2.0.7 doesn't have a direct way back
+                      // So we use the MethodChannel if possible, or just close and let user tap notification
+                      SystemAlertWindow.closeSystemWindow();
+                    } else {
+                      SystemAlertWindow.closeSystemWindow();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueAccent,
+                    shape: RoundedRectangleAtMost(20),
+                  ),
+                  child: const Text('Open Chat'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  ));
+    );
+  }
+}
+
+// Helper for RoundedRectangleBorder
+class RoundedRectangleAtMost extends RoundedRectangleBorder {
+  RoundedRectangleAtMost(double radius) : super(borderRadius: BorderRadius.circular(radius));
 }
 
 class MainApp extends StatefulWidget {
@@ -184,6 +308,10 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     final id = _pendingChatId;
     _pendingChatId = null;
     return id;
+  }
+
+  bool hasPendingChatId() {
+    return _pendingChatId != null;
   }
 }
 

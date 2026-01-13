@@ -51,17 +51,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     // Listen for notification taps while the app is in foreground
     _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
       NotificationService.setPendingNavigationChatId(chatId);
-      if (_chats.isNotEmpty) {
-        displayChats(_chats);
-      }
+      _checkAndNavigate();
     });
 
     // Listen for bubble taps while the app is in foreground
     _bubbleNavigationSubscription = BubbleService.navigationStream.listen((chatId) {
       NotificationService.setPendingNavigationChatId(chatId);
-      if (_chats.isNotEmpty) {
-        displayChats(_chats);
-      }
+      _checkAndNavigate();
     });
 
     NotificationService().getToken().then((token) {
@@ -83,9 +79,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       // Check for pending navigation when app comes back to foreground
-      if (_chats.isNotEmpty) {
-        displayChats(_chats);
-      }
+      _checkAndNavigate();
     }
   }
 
@@ -97,12 +91,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
         final payload = jsonDecode(details.notificationResponse!.payload!);
         final chatId = payload['chatId'] as String?;
         if (chatId != null) {
-          // Store it so displayChats can use it
           NotificationService.setPendingNavigationChatId(chatId);
-          // If chats are already loaded, trigger navigation
-          if (_chats.isNotEmpty) {
-            displayChats(_chats);
-          }
+          _checkAndNavigate();
         }
       } catch (e) {
         print('Error checking notification launch: $e');
@@ -115,9 +105,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       final String? chatId = await platform.invokeMethod('getLaunchChatId');
       if (chatId != null && chatId.isNotEmpty) {
         NotificationService.setPendingNavigationChatId(chatId);
-        if (_chats.isNotEmpty) {
-          displayChats(_chats);
-        }
+        _checkAndNavigate();
       }
     } catch (_) {}
   }
@@ -140,7 +128,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   void showMessage(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.grey.shade900,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.4),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline, color: Colors.blueAccent, size: 20),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ),
+            ],
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        margin: EdgeInsets.only(
+          bottom: MediaQuery.of(context).size.height - 160,
+          left: 16,
+          right: 16,
+        ),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
@@ -150,33 +173,62 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     setState(() {
       _chats = chats;
     });
+    _checkAndNavigate();
+  }
+
+  Future<void> _checkAndNavigate() async {
+    if (!mounted) return;
+
     final mainApp = context.findAncestorStateOfType<MainAppState>();
     final pendingId = mainApp?.consumePendingChatId() ?? 
                      _consumeInitialChatId() ?? 
                      NotificationService.consumePendingNavigationChatId();
     
-    if (pendingId != null) {
-      debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
-      Chat? target;
-      for (final c in _chats) {
-        if (c.id == pendingId) {
-          target = c;
-          break;
-        }
-      }
-      if (target != null) {
-        debugPrint('HomeScreen: Navigating to chat: ${target.id}');
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => ChatScreen(chat: target!),
-            ),
-          );
-        });
-      } else {
-        debugPrint('HomeScreen: Warning - Target chat $pendingId not found in loaded chats');
+    if (pendingId == null) return;
+
+    debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
+    
+    Chat? target;
+    for (final c in _chats) {
+      if (c.id == pendingId) {
+        target = c;
+        break;
       }
     }
+
+    if (target != null) {
+      _navigateToChat(target);
+    } else {
+      debugPrint('HomeScreen: Target chat $pendingId not found in loaded chats. Fetching directly.');
+      showLoading();
+      final fetchedChat = await _presenter.getChat(pendingId);
+      hideLoading();
+      
+      if (fetchedChat != null && mounted) {
+        _navigateToChat(fetchedChat);
+      } else {
+        debugPrint('HomeScreen: Error - Could not fetch chat $pendingId');
+      }
+    }
+  }
+
+  void _navigateToChat(Chat chat) {
+    debugPrint('HomeScreen: Navigating to chat: ${chat.id}');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) => ChatScreen(chat: chat),
+        ),
+      );
+    });
+  }
+
+  bool _isNavigationPending() {
+    final mainApp = context.findAncestorStateOfType<MainAppState>();
+    return mainApp?.hasPendingChatId() == true || 
+           _initialChatId != null || 
+           NotificationService.hasPendingNavigationChatId();
   }
 
   String? _consumeInitialChatId() {
@@ -192,6 +244,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading || _isNavigationPending()) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Colors.blueAccent),
+              SizedBox(height: 20),
+              Text(
+                'Opening chat...',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black, // Dark background like Messenger
       bottomNavigationBar: BottomNavigationBar(

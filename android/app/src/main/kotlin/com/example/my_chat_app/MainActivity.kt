@@ -16,6 +16,17 @@ import androidx.core.content.LocusIdCompat
 import android.app.PendingIntent
 import androidx.core.app.ActivityCompat
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.graphics.RectF
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -35,7 +46,8 @@ class MainActivity : FlutterActivity() {
                     val chatId = args?.get("chatId") as? String ?: ""
                     val title = args?.get("title") as? String ?: "Chat"
                     val body = args?.get("body") as? String ?: "Open conversation"
-                    showConversationBubble(chatId, title, body)
+                    val profilePicUrl = args?.get("profilePicUrl") as? String
+                    showConversationBubble(chatId, title, body, profilePicUrl)
                     result.success(true)
                 }
                 "getLaunchChatId" -> {
@@ -98,20 +110,72 @@ class MainActivity : FlutterActivity() {
         return notifEnabled && overlay && postGranted
     }
 
-    private fun showConversationBubble(chatId: String, title: String, body: String) {
+    private fun showConversationBubble(chatId: String, title: String, body: String, profilePicUrl: String?) {
+        if (profilePicUrl != null && profilePicUrl.isNotEmpty()) {
+            thread {
+                try {
+                    val url = URL(profilePicUrl)
+                    val connection = url.openConnection() as HttpURLConnection
+                    connection.doInput = true
+                    connection.connect()
+                    val input = connection.inputStream
+                    val bitmap = BitmapFactory.decodeStream(input)
+                    if (bitmap != null) {
+                        val circularBitmap = getCircularBitmap(bitmap)
+                        val icon = IconCompat.createWithBitmap(circularBitmap)
+                        runOnUiThread {
+                            buildAndShowBubble(chatId, title, body, icon)
+                        }
+                    } else {
+                        runOnUiThread {
+                            buildAndShowBubble(chatId, title, body, null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread {
+                        buildAndShowBubble(chatId, title, body, null)
+                    }
+                }
+            }
+        } else {
+            buildAndShowBubble(chatId, title, body, null)
+        }
+    }
+
+    private fun getCircularBitmap(bitmap: Bitmap): Bitmap {
+        val output = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val color = -0xbdbdbe
+        val paint = Paint()
+        val rect = Rect(0, 0, bitmap.width, bitmap.height)
+        val rectF = RectF(rect)
+        val roundPx = (if (bitmap.width < bitmap.height) bitmap.width / 2 else bitmap.height / 2).toFloat()
+        paint.isAntiAlias = true
+        canvas.drawARGB(0, 0, 0, 0)
+        paint.color = color
+        canvas.drawCircle(roundPx, roundPx, roundPx, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(bitmap, rect, rect, paint)
+        return output
+    }
+
+    private fun buildAndShowBubble(chatId: String, title: String, body: String, profileIcon: IconCompat?) {
         val intent = Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             putExtra("chatId", chatId)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
         val mutableFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
         val bubbleIntent = PendingIntent.getActivity(this, chatId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or mutableFlag)
 
-        val icon = IconCompat.createWithResource(this, R.mipmap.ic_launcher)
+        val defaultIcon = IconCompat.createWithResource(this, R.mipmap.ic_launcher)
+        val icon = profileIcon ?: defaultIcon
+        
         val person = Person.Builder().setName(title).setIcon(icon).build()
-        val me = Person.Builder().setName("You").setIcon(icon).build()
+        val me = Person.Builder().setName("You").setIcon(defaultIcon).build()
 
         val bubble = NotificationCompat.BubbleMetadata.Builder(bubbleIntent, icon)
-            .setDesiredHeight(600)
+            .setDesiredHeightResId(R.dimen.bubble_height)
             .setAutoExpandBubble(true)
             .setSuppressNotification(false)
             .build()

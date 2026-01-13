@@ -232,6 +232,19 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final title = message.notification?.title ?? message.data['title'] ?? localized['new_message']!;
   final bodyRaw = message.notification?.body ?? message.data['body'] ?? localized['you_have_new_message']!;
   final chatId = message.data['chatId'] as String?;
+  String? profilePicUrl = message.data['profilePicUrl'] as String?;
+  final senderId = message.data['senderId'] as String?;
+
+  if (profilePicUrl == null && senderId != null) {
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(senderId).get();
+      if (userDoc.exists) {
+        profilePicUrl = userDoc.data()?['profilePictureUrl'];
+      }
+    } catch (e) {
+      print('NotificationService: Error fetching profile picture in background: $e');
+    }
+  }
   
   String body = bodyRaw;
   if (bodyRaw.isNotEmpty && !bodyRaw.startsWith('[') && bodyRaw != localized['you_have_new_message']) {
@@ -242,25 +255,28 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
   }
 
-  final payload = jsonEncode(message.data);
   final notificationId = chatId != null ? chatId.hashCode : message.hashCode;
 
+  // Ensure senderId and chatId are in the payload for background too
+  final Map<String, dynamic> dataForPayload = Map.from(message.data);
+  if (senderId != null && !dataForPayload.containsKey('senderId')) {
+    dataForPayload['senderId'] = senderId;
+  }
+  if (chatId != null && !dataForPayload.containsKey('chatId')) {
+    dataForPayload['chatId'] = chatId;
+  }
+  final payload = jsonEncode(dataForPayload);
+
   // Use the service instance to show deduplicated notification
+  // This now also handles showing the bubble
   await NotificationService().showDeduplicatedNotification(
     title: title,
     body: body,
     payload: payload,
     chatId: chatId,
     notificationId: notificationId,
+    profilePicUrl: profilePicUrl,
   );
-
-  try {
-    await BubbleService.instance.start(
-      chatId: chatId ?? 'default',
-      title: title,
-      body: body,
-    );
-  } catch (_) {}
 }
 
 class NotificationService {
@@ -304,11 +320,12 @@ class NotificationService {
       await SystemAlertWindow.requestPermissions;
     }
   }
-  static Future<void> showBubble({required String chatId, required String title, String body = ''}) async {
+  static Future<void> showBubble({required String chatId, required String title, String body = '', String? profilePicUrl}) async {
     await BubbleService.instance.start(
       chatId: chatId,
       title: title,
       body: body.isNotEmpty ? body : 'Tap to open chat',
+      profilePicUrl: profilePicUrl,
     );
   }
 
@@ -494,6 +511,10 @@ class NotificationService {
     return id;
   }
 
+  static bool hasPendingNavigationChatId() {
+    return _pendingNavigationChatId != null;
+  }
+
   static final Map<String, List<Message>> _conversationHistory = {};
 
   static Future<void> _loadHistoryFromPrefs(String chatId) async {
@@ -645,17 +666,8 @@ class NotificationService {
       return;
     }
     // Show local notification when app is in foreground
+    // This now also handles showing the bubble via showDeduplicatedNotification
     await _showLocalNotification(message);
-    // Optionally start dash bubble
-    if (incomingChatId != null && (message.notification != null || message.data.isNotEmpty)) {
-      try {
-        await BubbleService.instance.start(
-          chatId: incomingChatId ?? 'default',
-          title: message.notification?.title ?? message.data['title'] ?? 'New Message',
-          body: message.notification?.body ?? message.data['body'] ?? 'You have a new message',
-        );
-      } catch (_) {}
-    }
   }
 
   /// Handle notification tap (opens app from background/terminated state)
@@ -701,6 +713,19 @@ class NotificationService {
     final localizedText = await _getLocalizedNotificationText();
     final title = message.notification?.title ?? message.data['title'] ?? localizedText['new_message']!;
     final bodyRaw = message.notification?.body ?? message.data['body'] ?? localizedText['you_have_new_message']!;
+    String? profilePicUrl = message.data['profilePicUrl'] as String?;
+    final senderId = message.data['senderId'] as String?;
+
+    if (profilePicUrl == null && senderId != null) {
+      try {
+        final userDoc = await FirebaseFirestore.instance.collection('users').doc(senderId).get();
+        if (userDoc.exists) {
+          profilePicUrl = userDoc.data()?['profilePictureUrl'];
+        }
+      } catch (e) {
+        print('NotificationService: Error fetching profile picture in foreground: $e');
+      }
+    }
     
     String body = bodyRaw;
     if (bodyRaw.isNotEmpty && !bodyRaw.startsWith('[') && bodyRaw != localizedText['you_have_new_message']) {
@@ -712,7 +737,13 @@ class NotificationService {
     }
 
     final notificationId = chatId != null ? chatId.hashCode : message.hashCode;
-    final payload = jsonEncode(message.data);
+    
+    // Ensure senderId is in the payload so showDeduplicatedNotification can use it
+    final Map<String, dynamic> dataWithSender = Map.from(message.data);
+    if (senderId != null && !dataWithSender.containsKey('senderId')) {
+      dataWithSender['senderId'] = senderId;
+    }
+    final payload = jsonEncode(dataWithSender);
 
     await showDeduplicatedNotification(
       title: title,
@@ -720,6 +751,7 @@ class NotificationService {
       payload: payload,
       chatId: chatId,
       notificationId: notificationId,
+      profilePicUrl: profilePicUrl,
     );
   }
 
@@ -739,6 +771,7 @@ class NotificationService {
     String? payload,
     String? chatId,
     int? notificationId,
+    String? profilePicUrl,
   }) async {
     final groupKey = chatId ?? 'default_group';
     final finalNotificationId = notificationId ?? (chatId != null ? chatId.hashCode : DateTime.now().millisecondsSinceEpoch.hashCode);
@@ -785,6 +818,44 @@ class NotificationService {
     );
     final summaryId = groupKey.hashCode + 1;
     await flutterLocalNotificationsPlugin.show(summaryId, title, body, summaryDetails, payload: finalPayload);
+
+    // Also show bubble
+    if (chatId != null) {
+      try {
+        // If profilePicUrl is missing, try to fetch it before showing the bubble
+        String? finalProfilePicUrl = profilePicUrl;
+        if (finalProfilePicUrl == null) {
+          // Extract senderId from payload if possible
+          String? senderId;
+          if (payload != null) {
+            try {
+              final data = jsonDecode(payload);
+              senderId = data['senderId'] as String?;
+            } catch (_) {}
+          }
+          
+          if (senderId != null) {
+            try {
+              final userDoc = await FirebaseFirestore.instance.collection('users').doc(senderId).get();
+              if (userDoc.exists) {
+                finalProfilePicUrl = userDoc.data()?['profilePictureUrl'];
+              }
+            } catch (e) {
+              print('Error fetching profile pic for bubble: $e');
+            }
+          }
+        }
+
+        await BubbleService.instance.start(
+          chatId: chatId,
+          title: title,
+          body: body,
+          profilePicUrl: finalProfilePicUrl,
+        );
+      } catch (e) {
+        print('Error showing bubble from deduplicated notification: $e');
+      }
+    }
   }
 
   /// Manually show a local notification (used by global listener)
@@ -793,6 +864,7 @@ class NotificationService {
     required String body,
     String? payload,
     String? chatId,
+    String? profilePicUrl,
   }) async {
     if (kIsWeb) return;
 
@@ -805,6 +877,7 @@ class NotificationService {
       body: body,
       payload: payload,
       chatId: chatId,
+      profilePicUrl: profilePicUrl,
     );
   }
 
@@ -888,33 +961,36 @@ class NotificationService {
               lastMessageStatus != 'read') {
             
             if (chatId != NotificationService.currentActiveChatId) {
-              String senderName = 'New Message';
-                try {
-                  final userDoc = await FirebaseFirestore.instance.collection('users').doc(lastMessageSenderId).get();
-                  if (userDoc.exists) {
-                    senderName = userDoc.data()?['displayName'] ?? userDoc.data()?['username'] ?? 'New Message';
-                  }
-                } catch (_) {}
-
-                final bodyRaw = chatData['lastMessageContent'] ?? 'You have a new message';
-                String body = bodyRaw;
-                
-                // Decrypt if it looks like encrypted text (not an attachment placeholder)
-                if (bodyRaw.isNotEmpty && !bodyRaw.startsWith('[')) {
+                String senderName = 'New Message';
+                String? profilePicUrl;
                   try {
-                    body = EncryptionService().decryptText(bodyRaw);
-                  } catch (e) {
-                    print('NotificationService: Decryption failed for global listener: $e');
+                    final userDoc = await FirebaseFirestore.instance.collection('users').doc(lastMessageSenderId).get();
+                    if (userDoc.exists) {
+                      senderName = userDoc.data()?['displayName'] ?? userDoc.data()?['username'] ?? 'New Message';
+                      profilePicUrl = userDoc.data()?['profilePictureUrl'];
+                    }
+                  } catch (_) {}
+
+                  final bodyRaw = chatData['lastMessageContent'] ?? 'You have a new message';
+                  String body = bodyRaw;
+                  
+                  // Decrypt if it looks like encrypted text (not an attachment placeholder)
+                  if (bodyRaw.isNotEmpty && !bodyRaw.startsWith('[')) {
+                    try {
+                      body = EncryptionService().decryptText(bodyRaw);
+                    } catch (e) {
+                      print('NotificationService: Decryption failed for global listener: $e');
+                    }
                   }
+                  
+                  showLocalNotificationManually(
+                    title: senderName,
+                    body: body,
+                    payload: jsonEncode({'chatId': chatId, 'type': 'message'}),
+                    chatId: chatId,
+                    profilePicUrl: profilePicUrl,
+                  );
                 }
-                
-                showLocalNotificationManually(
-                  title: senderName,
-                  body: body,
-                  payload: jsonEncode({'chatId': chatId, 'type': 'message'}),
-                  chatId: chatId,
-                );
-              }
             }
           }
         }
