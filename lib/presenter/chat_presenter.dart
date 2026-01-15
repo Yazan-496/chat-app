@@ -65,6 +65,11 @@ class ChatPresenter {
 
   /// Loads messages for the current chat and sets up a real-time listener.
   void loadMessages() {
+    // Set active chat ID for the current user
+    if (currentUserId != null) {
+      _userRepository.updateActiveChatId(currentUserId!, _chat.id);
+    }
+
     _chatRepository.getChatMessages(_chat.id).listen((messages) {
       final previousIds = _messages.map((m) => m.id).toSet();
       _messages = messages.map<Message>((message) {
@@ -468,6 +473,10 @@ class ChatPresenter {
   }
 
   void dispose() {
+    // Clear active chat ID for the current user
+    if (currentUserId != null) {
+      _userRepository.updateActiveChatId(currentUserId!, null);
+    }
     _audioRecorder.dispose();
     _audioPlayer.dispose();
     _otherUserStatusSubscription?.cancel(); // Cancel the status subscription

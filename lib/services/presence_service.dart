@@ -21,6 +21,7 @@ class PresenceService {
       await _supabase.from('profiles').update({
         'is_online': false,
         'last_seen': DateTime.now().toUtc().toIso8601String(),
+        'active_chat_id': null,
       }).eq('id', uid);
     } catch (e) {
       print('PresenceService: Failed to set offline for $uid: $e');

@@ -188,4 +188,15 @@ class UserRepository {
       print('UserRepository: Error updating status for $uid: $e');
     }
   }
+
+  /// Updates the user's active chat ID.
+  Future<void> updateActiveChatId(String uid, String? chatId) async {
+    try {
+      await _supabase.from('profiles').update({
+        'active_chat_id': chatId,
+      }).eq('id', uid);
+    } catch (e) {
+      print('UserRepository: Error updating active_chat_id for $uid: $e');
+    }
+  }
 }
