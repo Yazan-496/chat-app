@@ -45,7 +45,6 @@ class _MessageItemState extends State<MessageItem> {
   @override
   Widget build(BuildContext context) {
     final timeLabel = DateFormat('HH:mm').format(widget.message.timestamp);
-    final dateLabel = DateFormat('MMM d, yyyy').format(widget.message.timestamp);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
       child: Row(
@@ -142,33 +141,27 @@ class _MessageItemState extends State<MessageItem> {
                             child: Image.network(widget.message.content, width: 200, fit: BoxFit.cover),
                           ),
                         if (widget.message.type == MessageType.voice)
-                          VoiceMessagePlayer(
-                            audioUrl: widget.message.content,
-                            backgroundColor: Colors.transparent,
-                            textColor: Colors.white,
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: VoiceMessagePlayer(
+                              audioUrl: widget.message.content,
+                              backgroundColor: widget.isMe ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1),
+                              textColor: Colors.white,
+                            ),
                           ),
                         if (!widget.isOnlyEmojis)
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  if (widget.message.editedContent != null && !widget.message.deleted)
-                                    Padding(
-                                      padding: const EdgeInsets.only(right: 4.0),
-                                      child: Icon(Icons.edit, size: 12, color: Colors.white70),
-                                    ),
-                                  Text(
-                                    timeLabel,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 10),
-                                  ),
-                                ],
-                              ),
+                              if (widget.message.editedContent != null && !widget.message.deleted)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 4.0),
+                                  child: Icon(Icons.edit, size: 12, color: Colors.white70),
+                                ),
                               Text(
-                                dateLabel,
-                                style: const TextStyle(color: Colors.white60, fontSize: 8),
+                                timeLabel,
+                                style: const TextStyle(color: Colors.white70, fontSize: 10),
                               ),
                             ],
                           ),

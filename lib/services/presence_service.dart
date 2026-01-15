@@ -57,18 +57,17 @@ class PresenceService {
   }
 
   Future<void> _sendOnlineStatus() async {
-    if (_currentUserId == null) return;
-    try {
-      print('PresenceService: Sending heartbeat for user $_currentUserId (isOnline: true)');
-      await _supabase.rpc('handle_user_status', params: {
-        'user_id': _currentUserId,
-        'online_status': true,
-      });
-    } catch (e) {
-      print('PresenceService: Error sending heartbeat: $e');
-    }
+  if (_currentUserId == null) return;
+  try {
+    print('PresenceService: Sending heartbeat for user $_currentUserId');
+    await _supabase.rpc('handle_user_status', params: {
+      'p_user_id': _currentUserId,      
+      'p_online_status': true,         
+    });
+  } catch (e) {
+    print('PresenceService: Error sending heartbeat: $e');
   }
-
+}
   /// Helper for compatibility with old code
   Future<void> setUserOnline(String uid) async {
     print('PresenceService: Manually setting user online: $uid');
@@ -83,8 +82,8 @@ class PresenceService {
     
     try {
       await _supabase.rpc('handle_user_status', params: {
-        'user_id': uid,
-        'online_status': false,
+        'p_user_id': uid,
+        'p_online_status': false,
       });
     } catch (e) {
       print('PresenceService: Error setting offline status: $e');

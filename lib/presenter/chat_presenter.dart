@@ -265,6 +265,17 @@ class ChatPresenter {
     }
   }
 
+  /// Stops recording and discards the voice message.
+  Future<void> stopRecordingAndCancel() async {
+    try {
+      await _audioRecorder.stop();
+      _isRecording = false;
+      _view.updateView();
+    } catch (e) {
+      _view.showMessage('Failed to cancel recording: $e');
+    }
+  }
+
   /// Stops recording and sends the voice message. Uploads to Supabase Storage via MediaService.
   Future<void> stopRecordingAndSend() async {
     try {

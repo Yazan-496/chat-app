@@ -104,14 +104,20 @@ CREATE INDEX IF NOT EXISTS idx_chats_participant_ids ON public.chats USING GIN(p
 -- 5. FUNCTION: HANDLE USER ONLINE/OFFLINE STATUS
 -- ============================================
 -- This function updates the user's online status and last seen timestamp.
-CREATE OR REPLACE FUNCTION handle_user_status(user_id UUID, online_status BOOLEAN)
+-- We drop it first because changing parameter names isn't allowed with CREATE OR REPLACE.
+DROP FUNCTION IF EXISTS handle_user_status(UUID, BOOLEAN);
+
+CREATE OR REPLACE FUNCTION handle_user_status(p_user_id UUID, p_online_status BOOLEAN)
 RETURNS VOID AS $$
 BEGIN
   UPDATE public.profiles
   SET
-    is_online = online_status,
-    last_seen = CASE WHEN online_status = false THEN now() ELSE last_seen END
-  WHERE id = user_id;
+    last_seen = CASE 
+      WHEN p_online_status = false AND is_online = true THEN now() 
+      ELSE last_seen 
+    END,
+    is_online = p_online_status
+  WHERE id = p_user_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -292,6 +298,33 @@ CREATE POLICY "Users can delete relationships they are part of"
   ON relationships FOR DELETE 
   TO authenticated 
   USING ((auth.uid())::uuid = user_id1 OR (auth.uid())::uuid = user_id2);
+
+-- ============================================
+-- 10. STORAGE SETUP (for voice and images)
+-- ============================================
+-- Create the 'chat_media' bucket for voice messages and images
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('chat_media', 'chat_media', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- RLS Policies for storage.objects
+-- 1. Allow public to read files
+CREATE POLICY "Public Access" 
+  ON storage.objects FOR SELECT 
+  TO public 
+  USING (bucket_id = 'chat_media');
+
+-- 2. Allow authenticated users to upload files
+CREATE POLICY "Authenticated users can upload" 
+  ON storage.objects FOR INSERT 
+  TO authenticated 
+  WITH CHECK (bucket_id = 'chat_media');
+
+-- 3. Allow users to delete files (simplified for now)
+CREATE POLICY "Users can delete files" 
+  ON storage.objects FOR DELETE 
+  TO authenticated 
+  USING (bucket_id = 'chat_media');
 
 -- ============================================
 -- GRANT PERMISSIONS (if needed)

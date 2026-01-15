@@ -43,6 +43,11 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   Timer? _restoredMessageTimer;
   Timer? _connectionDebounceTimer;
   final SupabaseClient _supabase = Supabase.instance.client;
+  
+  // Voice recording state
+  Timer? _recordingTimer;
+  int _recordingDuration = 0;
+  bool _isRecording = false;
 
   // New emoji reactions list
   final List<String> _emojiReactions = [
@@ -178,11 +183,33 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   }
 
   void _toggleRecording() async {
-    if (_presenter.isRecording) {
+    if (_isRecording) {
+      _recordingTimer?.cancel();
       await _presenter.stopRecordingAndSend();
+      setState(() {
+        _isRecording = false;
+        _recordingDuration = 0;
+      });
     } else {
       await _presenter.startRecording();
+      if (_presenter.isRecording) {
+        setState(() {
+          _isRecording = true;
+          _recordingDuration = 0;
+        });
+        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          setState(() {
+            _recordingDuration++;
+          });
+        });
+      }
     }
+  }
+
+  String _formatDuration(int seconds) {
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${remainingSeconds.toString().padLeft(2, '0')}';
   }
 
   void _showImageSourceSelection() {
@@ -550,7 +577,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   }
 
   String _formatHeader(DateTime dt) {
-    return DateFormat('EEEE, MMM d, yyyy • HH:mm').format(dt);
+    return DateFormat('HH:mm').format(dt);
   }
 
   final Map<String, GlobalKey> _messageKeys = {};
@@ -785,89 +812,124 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           ),
         ],
       ),
-      child: Row(
-        children: [
-          IconButton(
-            icon: Icon(
-              _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions,
-              color: Colors.white70,
+      child: _isRecording ? _buildRecordingUI() : _buildNormalInputUI(),
+    );
+  }
+
+  Widget _buildRecordingUI() {
+    return Row(
+      children: [
+        const SizedBox(width: 8),
+        Icon(Icons.mic, color: Colors.red.shade400, size: 28),
+        const SizedBox(width: 12),
+        Text(
+          _formatDuration(_recordingDuration),
+          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(width: 15),
+        const Expanded(
+          child: Text(
+            'Recording...',
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+        ),
+        TextButton(
+          onPressed: () async {
+            _recordingTimer?.cancel();
+            await _presenter.stopRecordingAndCancel(); // Need to implement this in presenter
+            setState(() {
+              _isRecording = false;
+              _recordingDuration = 0;
+            });
+          },
+          child: const Text('Cancel', style: TextStyle(color: Colors.red)),
+        ),
+        IconButton(
+          icon: const Icon(Icons.send, color: Colors.purpleAccent, size: 28),
+          onPressed: _toggleRecording,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNormalInputUI() {
+    return Row(
+      children: [
+        IconButton(
+          icon: Icon(
+            _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions,
+            color: Colors.white70,
+          ),
+          onPressed: () {
+            if (_showEmojiPicker) {
+              _inputFocusNode.requestFocus();
+            } else {
+              _inputFocusNode.unfocus();
+              SystemChannels.textInput.invokeMethod('TextInput.hide');
+              setState(() {
+                _showEmojiPicker = true;
+              });
+            }
+          },
+        ),
+        Expanded(
+          child: TextField(
+            controller: _messageController,
+            focusNode: _inputFocusNode,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: _presenter.selectedMessageForEdit != null
+                  ? 'Edit message...'
+                  : _presenter.selectedMessageForReply != null
+                      ? 'Reply to message...'
+                      : 'Type a message...',
+              hintStyle: const TextStyle(color: Colors.white54),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(25),
+                borderSide: BorderSide.none,
+              ),
+              filled: true,
+              fillColor: Colors.grey.shade800,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             ),
-            onPressed: () {
-              if (_showEmojiPicker) {
-                // Return to keyboard
-                _inputFocusNode.requestFocus();
-              } else {
-                // Show emojis, hide keyboard
-                _inputFocusNode.unfocus();
-                SystemChannels.textInput.invokeMethod('TextInput.hide');
-                setState(() {
-                  _showEmojiPicker = true;
-                });
+            onChanged: (text) {
+              _presenter.notifyTyping(text.isNotEmpty);
+            },
+            onSubmitted: (text) {
+              if (text.trim().isNotEmpty) {
+                _sendMessage();
               }
             },
           ),
-          Expanded(
-            child: TextField(
-              controller: _messageController,
-              focusNode: _inputFocusNode,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: _presenter.selectedMessageForEdit != null
-                    ? 'Edit message...'
-                    : _presenter.selectedMessageForReply != null
-                        ? 'Reply to message...'
-                        : 'Type a message...',
-                hintStyle: const TextStyle(color: Colors.white54),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(25),
-                  borderSide: BorderSide.none,
-                ),
-                filled: true,
-                fillColor: Colors.grey.shade800,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              ),
-              onChanged: (text) {
-                _presenter.notifyTyping(text.isNotEmpty);
-              },
-              onSubmitted: (text) {
-                if (text.trim().isNotEmpty) {
+        ),
+        IconButton(
+          icon: const Icon(Icons.attach_file, color: Colors.white70),
+          onPressed: _showImageSourceSelection,
+        ),
+        IconButton(
+          icon: const Icon(Icons.mic, color: Colors.white70),
+          onPressed: _toggleRecording,
+        ),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _messageController,
+          builder: (context, value, child) {
+            final isNotEmpty = value.text.trim().isNotEmpty;
+            return IconButton(
+              icon: isNotEmpty 
+                ? const Icon(Icons.send, color: Colors.purpleAccent)
+                : const Text('🌝', style: TextStyle(fontSize: 24)),
+              onPressed: () {
+                if (isNotEmpty) {
+                  _sendMessage();
+                } else {
+                  _messageController.text = '🌝';
                   _sendMessage();
                 }
               },
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.attach_file, color: Colors.white70),
-            onPressed: _showImageSourceSelection,
-          ),
-          IconButton(
-            icon: Icon(
-              _presenter.isRecording ? Icons.stop : Icons.mic,
-              color: _presenter.isRecording ? Colors.red : Colors.white70,
-            ),
-            onPressed: _toggleRecording,
-          ),
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: _messageController,
-            builder: (context, value, child) {
-              final isNotEmpty = value.text.trim().isNotEmpty;
-              return IconButton(
-                icon: isNotEmpty 
-                  ? const Icon(Icons.send, color: Colors.purpleAccent)
-                  : const Text('🌝', style: TextStyle(fontSize: 24)),
-                onPressed: () {
-                  if (isNotEmpty) {
-                    _sendMessage();
-                  } else {
-                    _messageController.text = '🌝';
-                    _sendMessage();
-                  }
-                },
-              );
-            },
-          ),
-        ],
-      ),
+            );
+          },
+        ),
+      ],
     );
   }
 

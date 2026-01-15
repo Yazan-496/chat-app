@@ -355,8 +355,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   @override
   Widget build(BuildContext context) {
     if ((_isLoading && !_isSearching && _chats.isEmpty) || _isNavigationPending()) {
-      // Use 'LoZo' for initial load, 'Opening chat...' for transitions
-      final message = _isNavigationPending() ? 'Opening chat...' : 'LoZo';
+      final message = 'LoZo';
       return SplashScreen(message: message);
     }
 
