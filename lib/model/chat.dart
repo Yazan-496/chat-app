@@ -1,20 +1,20 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
 
 class Chat {
   final String id;
   final List<String> participantIds;
-  final String otherUserName;
-  final String? otherUserProfilePictureUrl;
+  final String displayName;
+  final String? profilePictureUrl;
+  final int? avatarColor;
   final RelationshipType relationshipType;
   final DateTime lastMessageTime;
   final String? lastMessageContent;
-  final String? lastMessageSenderId; // New field
-  final MessageStatus? lastMessageStatus; // New field
-  bool otherUserIsOnline;
-  DateTime? otherUserLastSeen;
-  int unreadCount; // New field for unread messages count
+  final String? lastMessageSenderId;
+  final MessageStatus? lastMessageStatus;
+  bool isOnline;
+  DateTime? lastSeen;
+  int unreadCount;
 
   String getOtherUserId(String currentUserId) {
     return participantIds.firstWhere((id) => id != currentUserId);
@@ -23,60 +23,58 @@ class Chat {
   Chat({
     required this.id,
     required this.participantIds,
-    required this.otherUserName,
-    this.otherUserProfilePictureUrl,
+    required this.displayName,
+    this.profilePictureUrl,
+    this.avatarColor,
     required this.relationshipType,
     required this.lastMessageTime,
     this.lastMessageContent,
     this.lastMessageSenderId,
     this.lastMessageStatus,
-    this.otherUserIsOnline = false,
-    this.otherUserLastSeen,
+    this.isOnline = false,
+    this.lastSeen,
     this.unreadCount = 0,
   });
 
   factory Chat.fromMap(Map<String, dynamic> data) {
     return Chat(
       id: data['id'] as String? ?? '',
-      participantIds: data['participantIds'] != null ? List<String>.from(data['participantIds'] as List) : [],
-      otherUserName: data['otherUserName'] as String? ?? 'Unknown',
-      otherUserProfilePictureUrl: data['otherUserProfilePictureUrl'] as String?,
+      participantIds: data['participant_ids'] != null ? List<String>.from(data['participant_ids'] as List) : [],
+      displayName: 'Unknown', 
+      profilePictureUrl: null,
+      avatarColor: data['avatar_color'] != null 
+          ? (data['avatar_color'] as int) | 0xFF000000 
+          : null,
       relationshipType: RelationshipType.values.firstWhere(
-          (e) => e.toString() == 'RelationshipType.' + (data['relationshipType'] as String? ?? 'friend'),
+          (e) => e.toString() == 'RelationshipType.' + (data['relationship_type'] ?? 'friend').toString(),
           orElse: () => RelationshipType.friend),
-      lastMessageTime: data['lastMessageTime'] is Timestamp 
-          ? (data['lastMessageTime'] as Timestamp).toDate() 
-          : (data['lastMessageTime'] != null ? DateTime.tryParse(data['lastMessageTime'].toString()) ?? DateTime.now() : DateTime.now()),
-      lastMessageContent: data['lastMessageContent'] as String?,
-      lastMessageSenderId: data['lastMessageSenderId'] as String?,
-      lastMessageStatus: data['lastMessageStatus'] != null
+      lastMessageTime: data['last_message_time'] != null 
+          ? DateTime.tryParse(data['last_message_time'].toString()) ?? DateTime.now() 
+          : DateTime.now(),
+      lastMessageContent: data['last_message_content'] as String?,
+      lastMessageSenderId: data['last_message_sender_id'] as String?,
+      lastMessageStatus: data['last_message_status'] != null
           ? MessageStatus.values.firstWhere(
-              (e) => e.toString().split('.').last == data['lastMessageStatus'].toString(),
+              (e) => e.toString().split('.').last == data['last_message_status'].toString(),
               orElse: () => MessageStatus.sent)
           : null,
-      otherUserIsOnline: data['otherUserIsOnline'] as bool? ?? false,
-      otherUserLastSeen: data['otherUserLastSeen'] != null 
-          ? (data['otherUserLastSeen'] is Timestamp 
-              ? (data['otherUserLastSeen'] as Timestamp).toDate() 
-              : DateTime.tryParse(data['otherUserLastSeen'].toString()))
-          : null,
-      unreadCount: data['unreadCount'] as int? ?? 0,
+      isOnline: false,
+      lastSeen: null,
+      unreadCount: (data['unread_count'] ?? data['unreadcount']) as int? ?? 0,
     );
   }
 
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'participantIds': participantIds,
-      'otherUserName': otherUserName,
-      'otherUserProfilePictureUrl': otherUserProfilePictureUrl,
-      'relationshipType': relationshipType.name,
-      'lastMessageTime': lastMessageTime.toIso8601String(),
-      'lastMessageContent': lastMessageContent,
-      'lastMessageSenderId': lastMessageSenderId,
-      'lastMessageStatus': lastMessageStatus?.toString().split('.').last,
-      'otherUserIsOnline': otherUserIsOnline,
-      'otherUserLastSeen': otherUserLastSeen?.toIso8601String(),
+      'participant_ids': participantIds,
+      'relationship_type': relationshipType.name,
+      'last_message_time': lastMessageTime.toIso8601String(),
+      'last_message_content': lastMessageContent,
+      'last_message_sender_id': lastMessageSenderId,
+      'last_message_status': lastMessageStatus?.toString().split('.').last,
+      'avatar_color': avatarColor,
+      // Note: username, profile_picture_url, is_online, last_seen are NOT in the 'chats' table
     };
   }
 
@@ -84,29 +82,31 @@ class Chat {
   Chat copyWith({
     String? id,
     List<String>? participantIds,
-    String? otherUserName,
-    String? otherUserProfilePictureUrl,
+    String? displayName,
+    String? profilePictureUrl,
+    int? avatarColor,
     RelationshipType? relationshipType,
     DateTime? lastMessageTime,
     String? lastMessageContent,
     String? lastMessageSenderId,
     MessageStatus? lastMessageStatus,
-    bool? otherUserIsOnline,
-    DateTime? otherUserLastSeen,
+    bool? isOnline,
+    DateTime? lastSeen,
     int? unreadCount,
   }) {
     return Chat(
       id: id ?? this.id,
       participantIds: participantIds ?? this.participantIds,
-      otherUserName: otherUserName ?? this.otherUserName,
-      otherUserProfilePictureUrl: otherUserProfilePictureUrl ?? this.otherUserProfilePictureUrl,
+      displayName: displayName ?? this.displayName,
+      profilePictureUrl: profilePictureUrl ?? this.profilePictureUrl,
+      avatarColor: avatarColor ?? this.avatarColor,
       relationshipType: relationshipType ?? this.relationshipType,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       lastMessageContent: lastMessageContent ?? this.lastMessageContent,
       lastMessageSenderId: lastMessageSenderId ?? this.lastMessageSenderId,
       lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus,
-      otherUserIsOnline: otherUserIsOnline ?? this.otherUserIsOnline,
-      otherUserLastSeen: otherUserLastSeen ?? this.otherUserLastSeen,
+      isOnline: isOnline ?? this.isOnline,
+      lastSeen: lastSeen ?? this.lastSeen,
       unreadCount: unreadCount ?? this.unreadCount,
     );
   }

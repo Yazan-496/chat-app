@@ -1,5 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
 enum MessageStatus {
   sending,
   sent,
@@ -45,21 +43,21 @@ class Message {
   factory Message.fromMap(Map<String, dynamic> data) {
     return Message(
       id: data['id'] as String? ?? '',
-      chatId: data['chatId'] as String? ?? '',
-      senderId: data['senderId'] as String? ?? '',
-      receiverId: data['receiverId'] as String? ?? '',
+      chatId: data['chat_id'] as String? ?? '',
+      senderId: data['sender_id'] as String? ?? '',
+      receiverId: data['receiver_id'] as String? ?? '',
       type: MessageType.values.firstWhere(
           (e) => e.toString() == 'MessageType.' + (data['type'] as String? ?? 'text'),
           orElse: () => MessageType.text),
       content: data['content'] as String? ?? '',
-      timestamp: data['timestamp'] is Timestamp 
-          ? (data['timestamp'] as Timestamp).toDate() 
-          : (data['timestamp'] != null ? DateTime.tryParse(data['timestamp'].toString()) ?? DateTime.now() : DateTime.now()),
+      timestamp: data['timestamp'] != null 
+          ? (DateTime.tryParse(data['timestamp'].toString())?.toUtc() ?? DateTime.now().toUtc()) 
+          : DateTime.now().toUtc(),
       status: MessageStatus.values.firstWhere(
           (e) => e.toString() == 'MessageStatus.' + (data['status'] as String? ?? 'sent'),
           orElse: () => MessageStatus.sent),
-      replyToMessageId: data['replyToMessageId'] as String?,
-      editedContent: data['editedContent'] as String?,
+      replyToMessageId: data['reply_to_message_id'] as String?,
+      editedContent: data['edited_content'] as String?,
       reactions: Map<String, String>.from(data['reactions'] as Map? ?? {}),
       deleted: (data['deleted'] as bool?) ?? false,
     );
@@ -68,15 +66,15 @@ class Message {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'chatId': chatId,
-      'senderId': senderId,
-      'receiverId': receiverId,
+      'chat_id': chatId,
+      'sender_id': senderId,
+      'receiver_id': receiverId,
       'type': type.toString().split('.').last,
       'content': content,
       'timestamp': timestamp.toIso8601String(),
       'status': status.toString().split('.').last,
-      'replyToMessageId': replyToMessageId,
-      'editedContent': editedContent,
+      'reply_to_message_id': replyToMessageId,
+      'edited_content': editedContent,
       'reactions': reactions,
       'deleted': deleted,
     };

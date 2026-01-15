@@ -6,4 +6,6 @@ abstract class HomeView {
   void showMessage(String message);
   void displayChats(List<Chat> chats);
   void updateView();
+  void updateUserStatus(String userId, bool isOnline, DateTime? lastSeen);
+  void navigateToLogin();
 }

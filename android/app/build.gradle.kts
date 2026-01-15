@@ -1,8 +1,6 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    id("com.google.gms.google-services") // New line for Google Services    
-    id("com.google.firebase.crashlytics") // New line for Crashlytics (optional but good for production)
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
@@ -42,9 +40,5 @@ android {
     }
     dependencies {
         coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-        implementation(platform("com.google.firebase:firebase-bom:34.7.0")) // New line for Firebase BOM
-        implementation("com.google.firebase:firebase-analytics") // New line for Firebase Analytics
-        implementation("com.google.firebase:firebase-messaging") // New line for Firebase Messaging
-        implementation("com.google.firebase:firebase-crashlytics") // New line for Firebase Crashlytics
     }
 }

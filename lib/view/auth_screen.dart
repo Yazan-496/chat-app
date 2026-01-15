@@ -124,7 +124,7 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
                                     : null,
                               ),
                               const SizedBox(height: 4.0),
-                              Text(user.displayName, style: const TextStyle(fontSize: 12)),
+                              Text(user.displayName[0], style: const TextStyle(fontSize: 12)),
                             ],
                           ),
                         ),

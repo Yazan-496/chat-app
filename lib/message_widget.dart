@@ -7,8 +7,9 @@ class MessageItem extends StatefulWidget {
   final Message message;
   final bool isMe;
   final bool showAvatar;
-  final String? otherUserProfilePictureUrl;
-  final String otherUserName;
+  final String? profilePictureUrl;
+  final int? avatarColor;
+  final String displayName;
   final bool isOnlyEmojis;
   final Function(Message) onLongPress;
   final Widget Function(String) buildReplyPreview;
@@ -22,8 +23,9 @@ class MessageItem extends StatefulWidget {
     required this.message,
     required this.isMe,
     required this.showAvatar,
-    required this.otherUserProfilePictureUrl,
-    required this.otherUserName,
+    required this.profilePictureUrl,
+    this.avatarColor,
+    required this.displayName,
     required this.isOnlyEmojis,
     required this.onLongPress,
     required this.buildReplyPreview,
@@ -56,11 +58,17 @@ class _MessageItemState extends State<MessageItem> {
               child: widget.showAvatar
                   ? CircleAvatar(
                       radius: 14,
-                      backgroundImage: widget.otherUserProfilePictureUrl != null
-                          ? NetworkImage(widget.otherUserProfilePictureUrl!)
+                      backgroundColor: widget.avatarColor != null 
+                          ? Color(widget.avatarColor!) 
+                          : Colors.blue.shade300,
+                      backgroundImage: widget.profilePictureUrl != null
+                          ? NetworkImage(widget.profilePictureUrl!)
                           : null,
-                      child: widget.otherUserProfilePictureUrl == null
-                          ? Text(widget.otherUserName.isEmpty ? '?' : widget.otherUserName[0].toUpperCase())
+                      child: widget.profilePictureUrl == null
+                          ? Text(
+                              widget.displayName.isEmpty ? '?' : widget.displayName[0].toUpperCase(),
+                              style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                            )
                           : null,
                     )
                  : const SizedBox(width: 28), // Placeholder for alignment

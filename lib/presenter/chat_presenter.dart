@@ -1,4 +1,5 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import 'package:my_chat_app/data/chat_repository.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/message.dart';
@@ -6,15 +7,15 @@ import 'package:my_chat_app/view/chat_view.dart';
 import 'package:my_chat_app/services/media_service.dart';
 import 'package:my_chat_app/services/encryption_service.dart';
 import 'package:my_chat_app/services/local_storage_service.dart';
-import 'package:my_chat_app/data/user_repository.dart'; // New import
-import 'package:my_chat_app/model/user.dart' as model; // New import
-import 'package:record/record.dart'; // Keep for recording state
+import 'package:my_chat_app/data/user_repository.dart';
+import 'package:my_chat_app/model/user.dart' as model;
+import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:image_picker/image_picker.dart';
 import 'dart:async';
 import 'package:my_chat_app/services/sound_service.dart';
-import 'package:my_chat_app/services/notification_service.dart';
+import 'package:my_chat_app/notification_service.dart';
 
 /// Presenter for the chat screen.
 /// Handles all business logic related to a specific chat, including message sending,
@@ -25,22 +26,24 @@ class ChatPresenter {
   final MediaService _mediaService;
   final EncryptionService _encryptionService;
   final LocalStorageService _localStorageService = LocalStorageService();
-  final UserRepository _userRepository; // New instance
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
+  final UserRepository _userRepository;
+  final SupabaseClient _supabase = Supabase.instance.client;
   final Chat _chat;
+  final _uuid = const Uuid();
   List<Message> _messages = [];
+  List<Message> _optimisticMessages = [];
   Set<String> _seenMessageIds = {};
 
   Message? _selectedMessageForReply;
   Message? _selectedMessageForEdit;
 
-  final AudioRecorder _audioRecorder = AudioRecorder(); // Correct instantiation
+  final AudioRecorder _audioRecorder = AudioRecorder();
   final AudioPlayer _audioPlayer = AudioPlayer();
   String? _currentRecordingPath;
   bool _isRecording = false;
   Timer? _typingTimer;
   Timer? _readTimer;
-  StreamSubscription? _otherUserStatusSubscription; // New subscription for other user status
+  StreamSubscription? _otherUserStatusSubscription;
   bool _otherUserInChat = false;
   bool _otherUserInChatPrev = false;
 
@@ -50,7 +53,7 @@ class ChatPresenter {
         _encryptionService = EncryptionService(),
         _userRepository = UserRepository();
 
-  String? get currentUserId => _firebaseAuth.currentUser?.uid;
+  String? get currentUserId => _supabase.auth.currentUser?.id;
 
   List<Message> get messages => _messages;
   Message? get selectedMessageForReply => _selectedMessageForReply;
@@ -84,6 +87,11 @@ class ChatPresenter {
         }
         return message;
       }).toList();
+
+      // Remove optimistic messages that are now confirmed by the stream
+      final confirmedIds = _messages.map((m) => m.id).toSet();
+      _optimisticMessages.removeWhere((m) => confirmedIds.contains(m.id));
+
       _markIncomingMessagesAsDelivered(_messages, previousIds);
       final otherId = _chat.getOtherUserId(currentUserId!);
       final hasNewIncoming = _messages.any((m) => m.senderId == otherId && !previousIds.contains(m.id));
@@ -91,17 +99,16 @@ class ChatPresenter {
         // Schedule read marking for new incoming while we are in chat
         scheduleReadMark();
       }
-      _view.displayMessages(_messages);
-      _view.updateView();
+      _updateViewWithCombinedMessages();
     });
 
     // Subscribe to other user's online status
     final otherUserId = _chat.getOtherUserId(currentUserId!);
-    _otherUserStatusSubscription = _userRepository.streamUserStatus(otherUserId).listen((otherUser) {
+    _otherUserStatusSubscription = _userRepository.getCurrentUserStream(otherUserId).listen((otherUser) {
       if (otherUser != null) {
         final wasInChat = _otherUserInChat;
-        _chat.otherUserIsOnline = otherUser.isOnline;
-        _chat.otherUserLastSeen = otherUser.lastSeen;
+        _chat.isOnline = otherUser.isOnline;
+        _chat.lastSeen = otherUser.lastSeen;
         _otherUserInChat = otherUser.activeChatId == _chat.id;
         _otherUserInChatPrev = wasInChat;
         // If we are in this chat, always schedule read marking
@@ -113,23 +120,13 @@ class ChatPresenter {
     });
 
     // Subscribe to chat document for typing/presence updates
-    _chatRepository.getChatDocStream(_chat.id).listen((doc) {
+    _chatRepository.getChatDocStream(_chat.id).listen((data) {
       try {
-        final data = doc.data() as Map<String, dynamic>?;
-        if (data != null && data['typing'] is Map<String, dynamic>) {
-          final typingMap = Map<String, dynamic>.from(data['typing']);
+        if (data.isNotEmpty && data['typing_status'] is Map<String, dynamic>) {
+          final typingMap = Map<String, dynamic>.from(data['typing_status']);
           final otherId = _chat.getOtherUserId(currentUserId!);
           final isTyping = typingMap[otherId] == true;
           _otherUserTyping = isTyping;
-          if (NotificationService.currentActiveChatId == _chat.id) {
-            if (isTyping) {
-              SoundService.instance.startTypingLoop();
-            } else {
-              SoundService.instance.stopTypingLoop();
-            }
-          } else {
-            SoundService.instance.stopTypingLoop();
-          }
           _view.updateView();
         }
       } catch (e) {
@@ -183,38 +180,69 @@ class ChatPresenter {
       return;
     }
 
-    SoundService.instance.playSent();
     final encryptedContent = _encryptionService.encryptText(content);
 
+    final messageId = _uuid.v4();
     final message = Message(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: messageId,
       chatId: _chat.id,
       senderId: currentUserId!,
       receiverId: _chat.getOtherUserId(currentUserId!),
       type: MessageType.text,
       content: encryptedContent,
-      timestamp: DateTime.now(),
+      timestamp: DateTime.now().toUtc(),
       status: MessageStatus.sending, // Set initial status
       replyToMessageId: _selectedMessageForReply?.id,
     );
+
+    // Add to optimistic messages for immediate display
+    // We use the unencrypted content for local display in the optimistic message
+    final optimisticMessage = message.copyWith(content: content);
+    _optimisticMessages.add(optimisticMessage);
+    _updateViewWithCombinedMessages();
+
     // Introduce a delay to visually show "sending" state
     await Future.delayed(const Duration(seconds: 0));
-    await _chatRepository.sendMessage(message);
+    final error = await _chatRepository.sendMessage(message);
+    if (error != null) {
+      _optimisticMessages.removeWhere((m) => m.id == messageId);
+      _updateViewWithCombinedMessages();
+    } else {
+      // Play sound only after successful send (one check)
+      SoundService.instance.playSent();
+    }
     _selectedMessageForReply = null;
     _view.updateView();
   }
 
-  /// Notify typing status. Sets typing=true and schedules a debounce to set
-  /// typing=false after 2 seconds of inactivity.
+  /// Updates the view with a combination of real messages and optimistic (unsent) messages.
+  void _updateViewWithCombinedMessages() {
+    final combined = [..._messages, ..._optimisticMessages];
+    // Sort by timestamp descending (newest first)
+    // Since ListView is reversed (reverse: true), index 0 (newest) will be at the bottom.
+    combined.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    _view.displayMessages(combined);
+  }
+
+  bool _isTyping = false;
+
+  /// Notify typing status. Debounced to avoid excessive database writes.
   void notifyTyping(bool isTyping) {
     if (currentUserId == null) return;
-    _chatRepository.setTypingStatus(_chat.id, currentUserId!, isTyping);
-    _typingTimer?.cancel();
-    if (isTyping) {
-      _typingTimer = Timer(const Duration(seconds: 2), () {
-        _chatRepository.setTypingStatus(_chat.id, currentUserId!, false);
-      });
+    
+    if (isTyping && !_isTyping) {
+      // Started typing
+      _isTyping = true;
+      _chatRepository.setTypingStatus(_chat.id, currentUserId!, true);
     }
+
+    _typingTimer?.cancel();
+    _typingTimer = Timer(const Duration(seconds: 2), () {
+      if (_isTyping) {
+        _isTyping = false;
+        _chatRepository.setTypingStatus(_chat.id, currentUserId!, false);
+      }
+    });
   }
 
   /// Starts recording a voice message.
@@ -232,7 +260,7 @@ class ChatPresenter {
     }
   }
 
-  /// Stops recording and sends the voice message. Uploads to Firebase Storage via MediaService.
+  /// Stops recording and sends the voice message. Uploads to Supabase Storage via MediaService.
   Future<void> stopRecordingAndSend() async {
     try {
       final path = await _audioRecorder.stop();
@@ -243,18 +271,29 @@ class ChatPresenter {
         final storagePath = 'chat_media/${_chat.id}/voice/${DateTime.now().millisecondsSinceEpoch}.m4a';
         final mediaUrl = await _mediaService.uploadFile(path, storagePath);
         if (mediaUrl != null) {
-          SoundService.instance.playSent();
+          final messageId = _uuid.v4();
           final message = Message(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            id: messageId,
             chatId: _chat.id,
             senderId: currentUserId!,
             receiverId: _chat.getOtherUserId(currentUserId!),
             type: MessageType.voice,
             content: mediaUrl,
-            timestamp: DateTime.now(),
+            timestamp: DateTime.now().toUtc(),
             replyToMessageId: _selectedMessageForReply?.id,
           );
-          await _chatRepository.sendMessage(message);
+
+          // Add to optimistic messages for immediate display
+          _optimisticMessages.add(message);
+          _updateViewWithCombinedMessages();
+
+          final error = await _chatRepository.sendMessage(message);
+          if (error == null) {
+            SoundService.instance.playSent();
+          } else {
+            _optimisticMessages.removeWhere((m) => m.id == messageId);
+            _updateViewWithCombinedMessages();
+          }
           _selectedMessageForReply = null;
           _view.updateView();
         } else {
@@ -303,21 +342,32 @@ class ChatPresenter {
         final storagePath = 'chat_media/${_chat.id}/image/${DateTime.now().millisecondsSinceEpoch}.jpg';
         final mediaUrl = await _mediaService.uploadFile(image.path, storagePath);
         if (mediaUrl != null) {
+          final messageId = _uuid.v4();
           final message = Message(
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            id: messageId,
             chatId: _chat.id,
             senderId: currentUserId!,
             receiverId: _chat.getOtherUserId(currentUserId!),
             type: MessageType.image,
             content: mediaUrl,
-            timestamp: DateTime.now(),
+            timestamp: DateTime.now().toUtc(),
             status: MessageStatus.sending, // Set initial status
             replyToMessageId: _selectedMessageForReply?.id,
           );
+
+          // Add to optimistic messages for immediate display
+          _optimisticMessages.add(message);
+          _updateViewWithCombinedMessages();
+
           // Introduce a delay to visually show "sending" state
-          await Future.delayed(const Duration(seconds: 1));
-          SoundService.instance.playSent();
-          await _chatRepository.sendMessage(message);
+          await Future.delayed(const Duration(seconds: 0));
+          final error = await _chatRepository.sendMessage(message);
+          if (error == null) {
+            SoundService.instance.playSent();
+          } else {
+            _optimisticMessages.removeWhere((m) => m.id == messageId);
+            _updateViewWithCombinedMessages();
+          }
           _selectedMessageForReply = null;
           _view.updateView();
         } else {
@@ -325,7 +375,6 @@ class ChatPresenter {
         }
       }
     } catch (e) {
-      _view.showMessage('Failed to send image message: $e');
     }
   }
 
@@ -423,7 +472,6 @@ class ChatPresenter {
     _audioPlayer.dispose();
     _otherUserStatusSubscription?.cancel(); // Cancel the status subscription
     _readTimer?.cancel();
-    SoundService.instance.stopTypingLoop();
   }
 
   /// Marks all delivered messages from the other user as read.
@@ -454,8 +502,8 @@ class ChatPresenter {
       _view.displayMessages(_messages);
       _view.updateView();
       // Clear notifications for this chat after marking as read
-      flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode);
-      flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode + 1);
+      NotificationService.flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode);
+      NotificationService.flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode + 1);
     } catch (e) {
       print('ChatPresenter: Failed to mark messages as read: $e');
     }

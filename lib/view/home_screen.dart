@@ -1,23 +1,26 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:intl/intl.dart'; // New import for DateFormat
-import 'package:my_chat_app/main.dart'; // New import for MainAppState
+import 'package:intl/intl.dart';
+import 'package:my_chat_app/main.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/model/chat.dart';
-import 'package:my_chat_app/model/message.dart'; // Import Message and MessageStatus
-import 'package:my_chat_app/model/relationship.dart'; // Import RelationshipExtension
-import 'package:my_chat_app/services/encryption_service.dart'; // New import
-import 'package:my_chat_app/services/local_storage_service.dart'; // New import
+import 'package:my_chat_app/model/message.dart';
+import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/services/encryption_service.dart';
+import 'package:my_chat_app/services/local_storage_service.dart';
 import 'package:my_chat_app/presenter/home_presenter.dart';
-import 'package:my_chat_app/view/chat_screen.dart';
+import 'package:my_chat_app/chat_screen.dart';
 import 'package:my_chat_app/view/home_view.dart';
 import 'package:my_chat_app/view/profile_screen.dart';
-import 'package:my_chat_app/view/settings_screen.dart'; // New import
+import 'package:my_chat_app/view/settings_screen.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
 import 'package:my_chat_app/view/user_discovery_screen.dart';
-import 'package:my_chat_app/services/notification_service.dart';
+import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/services/bubble_service.dart';
+import 'package:my_chat_app/services/presence_service.dart';
+import 'package:my_chat_app/data/user_repository.dart';
+import 'package:my_chat_app/model/user.dart' as app_user;
 import 'package:flutter/services.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -30,14 +33,16 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver implements HomeView {
   late HomePresenter _presenter;
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
-  final EncryptionService _encryptionService = EncryptionService(); // New instance
-  final LocalStorageService _localStorageService = LocalStorageService(); // New instance
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final EncryptionService _encryptionService = EncryptionService();
+  final LocalStorageService _localStorageService = LocalStorageService();
   List<Chat> _chats = [];
   bool _isLoading = false;
+  app_user.User? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
   StreamSubscription<String>? _bubbleNavigationSubscription;
   String? _initialChatId;
+  Timer? _statusUpdateTimer;
 
   @override
   void initState() {
@@ -46,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     WidgetsBinding.instance.addObserver(this);
     _presenter = HomePresenter(this);
     _presenter.loadChats();
+    _loadCurrentUserProfile();
     _checkNotificationLaunch();
     
     // Listen for notification taps while the app is in foreground
@@ -60,9 +66,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       _checkAndNavigate();
     });
 
-    NotificationService().getToken().then((token) {
-      if (token != null) {
-        debugPrint('FCM_TOKEN=$token');
+    // Periodic timer to refresh "last seen" labels (e.g., from "1s ago" to "2s ago")
+    _statusUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      if (mounted) {
+        setState(() {
+          // Just trigger rebuild to update relative time strings
+        });
       }
     });
   }
@@ -71,6 +80,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   void dispose() {
     _navigationSubscription?.cancel();
     _bubbleNavigationSubscription?.cancel();
+    _statusUpdateTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -83,13 +93,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     }
   }
 
+  Future<void> _loadCurrentUserProfile() async {
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId != null) {
+      final userRepository = UserRepository();
+      final profile = await userRepository.getUser(userId);
+      if (mounted) {
+        setState(() {
+          _currentUserProfile = profile;
+        });
+      }
+    }
+  }
+
   Future<void> _checkNotificationLaunch() async {
     // 1. Check local notifications launch
-    final details = await flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
+    final details = await NotificationService.flutterLocalNotificationsPlugin.getNotificationAppLaunchDetails();
     if (details != null && details.didNotificationLaunchApp && details.notificationResponse?.payload != null) {
       try {
         final payload = jsonDecode(details.notificationResponse!.payload!);
-        final chatId = payload['chatId'] as String?;
+        final chatId = (payload['chat_id'] ?? payload['chatid']) as String?;
         if (chatId != null) {
           NotificationService.setPendingNavigationChatId(chatId);
           _checkAndNavigate();
@@ -239,7 +262,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   @override
   void updateView() {
-    setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void updateUserStatus(String userId, bool isOnline, DateTime? lastSeen) {
+    if (mounted) {
+      setState(() {
+        for (int i = 0; i < _chats.length; i++) {
+          if (_chats[i].participantIds.contains(userId)) {
+            _chats[i] = _chats[i].copyWith(
+              isOnline: isOnline,
+              lastSeen: lastSeen,
+            );
+          }
+        }
+      });
+    }
+  }
+
+  @override
+  void navigateToLogin() {
+    if (mounted) {
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+    }
   }
 
   @override
@@ -305,7 +353,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   },
                 ),
               ),
-            );
+            ).then((_) => _loadCurrentUserProfile());
           }
         },
       ),
@@ -336,19 +384,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         child: IconButton(
                           icon: const Icon(Icons.camera_alt, color: Colors.white),
                           onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (context) => SettingsScreen(
-                                  onThemeChanged: (mode) {
-                                    final mainApp = context.findAncestorStateOfType<MainAppState>();
-                                    if (mainApp != null) {
-                                      mainApp.setThemeMode(mode);
-                                    }
-                                  },
-                                ),
-                              ),
-                            );
-                          },
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => SettingsScreen(
+                      onThemeChanged: (mode) {
+                        final mainApp = context.findAncestorStateOfType<MainAppState>();
+                        if (mainApp != null) {
+                          mainApp.setThemeMode(mode);
+                        }
+                      },
+                    ),
+                  ),
+                ).then((_) => _loadCurrentUserProfile());
+              },
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -377,7 +425,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         child: IconButton(
                           icon: const Icon(Icons.logout, color: Colors.white),
                           onPressed: () async {
-                            await _firebaseAuth.signOut();
+                            final userId = _supabase.auth.currentUser?.id;
+                            if (userId != null) {
+                              final presenceService = PresenceService();
+                              await presenceService.setUserOffline(userId);
+                            }
+                            await _supabase.auth.signOut();
                             if (!mounted) return;
                             Navigator.of(context).pushAndRemoveUntil(
                               MaterialPageRoute(builder: (_) => const AuthScreen()),
@@ -418,17 +471,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             // Stories Section
             SizedBox(
               height: 100,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                itemCount: _chats.length + 1, // +1 for "Create Story"
-                itemBuilder: (context, index) {
-                  if (index == 0) {
-                    return _buildCreateStoryItem();
-                  }
-                  // Mock stories using chat users
-                  final chat = _chats[index - 1];
-                  return _buildStoryItem(chat);
+              child: Builder(
+                builder: (context) {
+                  final activeChats = _chats.where((chat) {
+                    if (chat.isOnline) return true;
+                    if (chat.lastSeen == null) return false;
+                    final difference = DateTime.now().difference(chat.lastSeen!);
+                    return difference.inMinutes < 1;
+                  }).toList();
+
+                  return ListView.builder(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    itemCount: activeChats.length + 1, // +1 for "Your Profile"
+                    itemBuilder: (context, index) {
+                      if (index == 0) {
+                        return _buildUserProfileItem();
+                      }
+                      // Show users from active chats
+                      final chat = activeChats[index - 1];
+                      return _buildStoryItem(chat);
+                    },
+                  );
                 },
               ),
             ),
@@ -458,73 +522,160 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
 
-  Widget _buildCreateStoryItem() {
-    return Padding(
-      padding: const EdgeInsets.only(right: 16.0),
-      child: Column(
-        children: [
-          Stack(
-            children: [
-              const CircleAvatar(
-                radius: 30,
-                backgroundColor: Colors.grey,
-                child: Icon(Icons.person, color: Colors.white, size: 30),
-              ),
-              Positioned(
-                bottom: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: const BoxDecoration(
-                    color: Colors.black,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const CircleAvatar(
-                    radius: 10,
-                    backgroundColor: Colors.blue,
-                    child: Icon(Icons.add, size: 16, color: Colors.white),
+  Widget _buildUserProfileItem() {
+    return GestureDetector(
+      onTap: () {
+        final userId = _supabase.auth.currentUser?.id;
+        if (userId != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => ProfileScreen(userId: userId),
+            ),
+          );
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(right: 16.0),
+        child: Column(
+          children: [
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 30,
+                  backgroundColor: _currentUserProfile?.avatarColor != null 
+                      ? Color(_currentUserProfile!.avatarColor!) 
+                      : Colors.grey,
+                  backgroundImage: _currentUserProfile?.profilePictureUrl != null
+                      ? NetworkImage(_currentUserProfile!.profilePictureUrl!)
+                      : null,
+                  child: _currentUserProfile?.profilePictureUrl == null
+                      ? Text(
+                          _currentUserProfile?.displayName.isNotEmpty == true 
+                              ? _currentUserProfile!.displayName[0].toUpperCase() 
+                              : '',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24),
+                        )
+                      : null,
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      color: Colors.greenAccent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.black, width: 2.5),
+                    ),
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: 80,
+              child: Text(
+                'You (${_currentUserProfile?.displayName ?? 'User'})',
+                style: const TextStyle(color: Colors.white, fontSize: 11),
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            'Your Story',
-            style: TextStyle(color: Colors.white, fontSize: 12),
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildStoryItem(Chat chat) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 16.0),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(2),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.blueAccent, width: 2),
-            ),
-            child: CircleAvatar(
-              radius: 28,
-              backgroundImage: chat.otherUserProfilePictureUrl != null
-                  ? NetworkImage(chat.otherUserProfilePictureUrl!)
-                  : null,
-              child: chat.otherUserProfilePictureUrl == null
-                  ? Text(chat.otherUserName.isNotEmpty ? chat.otherUserName[0].toUpperCase() : '')
-                  : null,
-            ),
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => ChatScreen(chat: chat),
           ),
-          const SizedBox(height: 4),
-          Text(
-            chat.otherUserName.split(' ')[0], // First name only
-            style: const TextStyle(color: Colors.white, fontSize: 12),
-          ),
-        ],
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.only(right: 16.0),
+        child: Column(
+          children: [
+            Stack(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 2),
+                  ),
+                  child: CircleAvatar(
+                    radius: 28,
+                    backgroundColor: chat.avatarColor != null 
+                        ? Color(chat.avatarColor!) 
+                        : Colors.blue.shade300,
+                    backgroundImage: chat.profilePictureUrl != null
+                        ? NetworkImage(chat.profilePictureUrl!)
+                        : null,
+                    child: chat.profilePictureUrl == null
+                        ? Text(
+                            chat.displayName.isNotEmpty ? chat.displayName[0].toUpperCase() : '',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          )
+                        : null,
+                  ),
+                ),
+                if (chat.isOnline)
+                  Positioned(
+                    bottom: 2,
+                    right: 2,
+                    child: Container(
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: Colors.greenAccent,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black, width: 2),
+                      ),
+                    ),
+                  )
+                else if (chat.lastSeen != null)
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade800.withOpacity(0.9),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.black, width: 1.5),
+                      ),
+                      child: Text(
+                        _formatCompactDuration(chat.lastSeen),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            SizedBox(
+              width: 60,
+              child: Text(
+                chat.displayName.split(' ').first,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -547,29 +698,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             // Avatar
             Stack(
               children: [
-                 FutureBuilder<int?>(
-                    future: _localStorageService.getAvatarColor(_firebaseAuth.currentUser!.uid),
-                    builder: (context, snapshot) {
-                      Color avatarColor = Colors.blue.shade300;
-                      if (snapshot.hasData && snapshot.data != null) {
-                        avatarColor = Color(snapshot.data!);
-                      }
-                      return CircleAvatar(
-                        radius: 28,
-                        backgroundColor: avatarColor,
-                        backgroundImage: chat.otherUserProfilePictureUrl != null
-                            ? NetworkImage(chat.otherUserProfilePictureUrl!)
-                            : null,
-                        child: chat.otherUserProfilePictureUrl == null
-                            ? Text(
-                                chat.otherUserName.isNotEmpty ? chat.otherUserName[0].toUpperCase() : '',
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
-                              )
-                            : null,
-                      );
-                    },
-                  ),
-                if (chat.otherUserIsOnline)
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: chat.avatarColor != null 
+                      ? Color(chat.avatarColor!) 
+                      : Colors.blue.shade300,
+                  backgroundImage: chat.profilePictureUrl != null
+                      ? NetworkImage(chat.profilePictureUrl!)
+                      : null,
+                  child: chat.profilePictureUrl == null
+                      ? Text(
+                          chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                        )
+                      : null,
+                ),
+                if (chat.isOnline)
                   Positioned(
                     bottom: 0,
                     right: 0,
@@ -583,21 +727,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                     ),
                   )
-                else if (chat.otherUserLastSeen != null && DateTime.now().difference(chat.otherUserLastSeen!).inMinutes < 10)
+                else if (chat.lastSeen != null)
                   Positioned(
                     bottom: -2,
                     right: -2,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
-                        color: Colors.greenAccent.withOpacity(0.9),
+                        color: Colors.grey.shade800.withOpacity(0.9),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.black, width: 1.5),
                       ),
                       child: Text(
-                        _formatCompactDuration(chat.otherUserLastSeen),
+                        _formatCompactDuration(chat.lastSeen),
                         style: const TextStyle(
-                          color: Colors.black,
+                          color: Colors.white70,
                           fontSize: 9,
                           fontWeight: FontWeight.bold,
                         ),
@@ -615,24 +759,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   Row(
                     children: [
                       Text(
-                        chat.otherUserName,
+                        chat.displayName,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      if (!chat.otherUserIsOnline && chat.otherUserLastSeen != null && DateTime.now().difference(chat.otherUserLastSeen!).inMinutes >= 10) ...[
-                        const SizedBox(width: 6),
-                        Text(
-                          _formatLastSeenShort(chat.otherUserLastSeen!),
-                          style: TextStyle(
-                            color: Colors.grey.shade500,
-                            fontSize: 11,
-                            fontWeight: FontWeight.normal,
-                          ),
+                      const SizedBox(width: 6),
+                      Text(
+                        chat.isOnline ? 'Online' : _formatLastSeenShort(chat.lastSeen),
+                        style: TextStyle(
+                          color: chat.isOnline ? Colors.greenAccent : Colors.grey.shade500,
+                          fontSize: 11,
+                          fontWeight: chat.isOnline ? FontWeight.bold : FontWeight.normal,
                         ),
-                      ],
+                      ),
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -648,10 +790,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                                 final raw = chat.lastMessageContent!;
                                 final looksLikeAttachment = raw.trim().startsWith('[') && raw.trim().endsWith(']');
                                 if (looksLikeAttachment) {
-                                  final isMe = chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid;
+                                  final isMe = chat.lastMessageSenderId == _supabase.auth.currentUser?.id;
                                   displayContent = isMe
                                       ? 'Sent an attachment'
-                                      : '${chat.otherUserName.split(' ').first} sent an attachment';
+                                      : '${chat.displayName} sent an attachment';
                                 } else {
                                   try {
                                     displayContent = _encryptionService.decryptText(raw);
@@ -660,10 +802,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                                   }
                                 }
                               }
-                              final isMe = chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid;
+                              final isMe = chat.lastMessageSenderId == _supabase.auth.currentUser?.id;
                               final senderLabel = isMe
                                   ? 'You: '
-                                  : (displayContent.contains('sent an attachment') ? '' : '${chat.otherUserName.split(' ').first}: ');
+                                  : (displayContent.contains('sent an attachment') ? '' : '${chat.displayName.split(' ').first}: ');
                               final prefix = senderLabel;
                               return '$prefix$displayContent';
                             })(),
@@ -691,7 +833,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               ),
             ),
             // Read Status Indicator (Optional)
-            if (chat.lastMessageSenderId == _firebaseAuth.currentUser?.uid)
+            if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
               (chat.lastMessageStatus == MessageStatus.read
                   ? _buildReadReceiptAvatar(chat)
                   : _buildMessageStatusIcon(chat.lastMessageStatus, chat)),
@@ -722,29 +864,38 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   String _formatCompactDuration(DateTime? lastSeen) {
     if (lastSeen == null) return '';
-    final now = DateTime.now();
-    final difference = now.difference(lastSeen);
+    final now = DateTime.now().toUtc();
+    final lastSeenUtc = lastSeen.toUtc();
+    final difference = now.difference(lastSeenUtc);
     
+    if (difference.isNegative || difference.inSeconds < 30) return 'now';
     if (difference.inSeconds < 60) return '${difference.inSeconds}s';
     if (difference.inMinutes < 60) return '${difference.inMinutes}m';
     if (difference.inHours < 24) return '${difference.inHours}h';
     return '${difference.inDays}d';
   }
 
-  String _formatLastSeenShort(DateTime lastSeen) {
-    final now = DateTime.now();
-    final difference = now.difference(lastSeen);
+  String _formatLastSeenShort(DateTime? lastSeen) {
+    if (lastSeen == null) return '';
+    
+    final now = DateTime.now().toUtc();
+    final lastSeenUtc = lastSeen.toUtc();
+    final difference = now.difference(lastSeenUtc);
 
-    if (difference.inMinutes < 60) {
+    if (difference.isNegative || difference.inSeconds < 30) {
+      return 'just now'; 
+    } else if (difference.inSeconds < 60) {
+      return 'last seen ${difference.inSeconds}s ago';
+    } else if (difference.inMinutes < 60) {
       return 'last seen ${difference.inMinutes}m ago';
     } else if (difference.inHours < 24) {
       return 'last seen ${difference.inHours}h ago';
     } else if (difference.inDays == 1) {
       return 'last seen yesterday';
     } else if (difference.inDays < 7) {
-      return 'last seen ${DateFormat('EEE').format(lastSeen.toLocal())}';
+      return 'last seen ${DateFormat('EEE').format(lastSeenUtc.toLocal())}';
     } else {
-      return 'last seen ${DateFormat('dd/MM/yyyy').format(lastSeen.toLocal())}';
+      return 'last seen ${DateFormat('dd/MM/yyyy').format(lastSeenUtc.toLocal())}';
     }
   }
 
@@ -754,7 +905,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text('Delete Chat'),
-          content: Text('Are you sure you want to delete your chat with ${chat.otherUserName}? This action cannot be undone.'),
+          content: Text('Are you sure you want to delete your chat with ${chat.displayName}? This action cannot be undone.'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -790,7 +941,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   Navigator.pop(context);
                   await BubbleService.instance.start(
                     chatId: chat.id,
-                    title: chat.otherUserName,
+                    title: chat.displayName,
                     body: 'Tap to chat',
                   );
                   try {
@@ -858,13 +1009,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
         ),
         child: CircleAvatar(
           radius: 10,
-          backgroundImage: chat.otherUserProfilePictureUrl != null
-              ? NetworkImage(chat.otherUserProfilePictureUrl!)
+          backgroundImage: chat.profilePictureUrl != null
+              ? NetworkImage(chat.profilePictureUrl!)
               : null,
           backgroundColor: Colors.grey.shade700,
-          child: chat.otherUserProfilePictureUrl == null
+          child: chat.profilePictureUrl == null
               ? Text(
-                  chat.otherUserName.isNotEmpty ? chat.otherUserName[0].toUpperCase() : '?',
+                  chat.displayName.isNotEmpty ? chat.displayName[0] : '?',
                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
                 )
               : null,
@@ -873,11 +1024,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
   String _formatLastSeen(DateTime lastSeen) {
-    final now = DateTime.now();
-    final difference = now.difference(lastSeen);
+    final now = DateTime.now().toUtc();
+    final lastSeenUtc = lastSeen.toUtc();
+    final difference = now.difference(lastSeenUtc);
 
-    if (difference.inMinutes < 1) {
-      return 'Active now';
+    if (difference.isNegative || difference.inMinutes < 1) {
+      return 'Online';
     } else if (difference.inMinutes < 60) {
       return 'Active ${difference.inMinutes}m ago';
     } else if (difference.inHours < 24) {
@@ -885,17 +1037,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     } else if (difference.inDays == 1) {
       return 'Active yesterday';
     } else if (difference.inDays < 7) {
-      return 'Active on ${DateFormat('EEE').format(lastSeen.toLocal())}';
+      return 'Active on ${DateFormat('EEE').format(lastSeenUtc.toLocal())}';
     } else {
-      return 'Active on ${DateFormat('dd/MM/yyyy').format(lastSeen.toLocal())}';
+      return 'Active on ${DateFormat('dd/MM/yyyy').format(lastSeenUtc.toLocal())}';
     }
   }
 
   Color _getLastSeenColor(DateTime lastSeen) {
-    final now = DateTime.now();
-    final difference = now.difference(lastSeen);
+    final now = DateTime.now().toUtc();
+    final lastSeenUtc = lastSeen.toUtc();
+    final difference = now.difference(lastSeenUtc);
 
-    if (difference.inSeconds < 30) {
+    if (difference.isNegative || difference.inSeconds < 30) {
       return Colors.greenAccent;
     } else {
       return Colors.grey;

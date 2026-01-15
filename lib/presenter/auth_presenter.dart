@@ -1,16 +1,16 @@
 import 'package:my_chat_app/services/authentication_service.dart';
-import 'package:my_chat_app/services/local_storage_service.dart'; // New import
+import 'package:my_chat_app/services/local_storage_service.dart';
 import 'package:my_chat_app/view/auth_view.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // For currentUser.uid
-import 'package:my_chat_app/data/user_repository.dart'; // New import
-import 'package:my_chat_app/model/user.dart' as app_user; // New import for app_user.User
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:my_chat_app/data/user_repository.dart';
+import 'package:my_chat_app/model/user.dart' as app_user;
 
 class AuthPresenter {
   final AuthView _view;
-  final FirebaseAuthService _authService = FirebaseAuthService();
-  final LocalStorageService _localStorageService = LocalStorageService(); // New instance
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance; // New instance
-  final UserRepository _userRepository = UserRepository(); // New instance
+  final SupabaseAuthService _authService = SupabaseAuthService();
+  final LocalStorageService _localStorageService = LocalStorageService();
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final UserRepository _userRepository = UserRepository();
 
   List<app_user.User> _recentUsers = [];
   String? _lastLoggedInEmail;
@@ -42,7 +42,7 @@ class AuthPresenter {
     await loadRecentUsers(); // Reload recent users after removal
   }
 
-  FirebaseAuthService get authService => _authService;
+  SupabaseAuthService get authService => _authService;
 
   Future<void> register(String username, String password) async {
     _view.showLoading();
@@ -51,11 +51,11 @@ class AuthPresenter {
     if (errorMessage == null) {
       _view.showMessage('Registration successful!');
       // Save credentials locally
-      final user = _firebaseAuth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user != null) {
         await _localStorageService.saveLastEmail(username);
         await _localStorageService.saveLastPassword(password);
-        await _localStorageService.addRecentUid(user.uid);
+        await _localStorageService.addRecentUid(user.id);
         await loadRecentUsers(); // Refresh recent users list
       }
       _view.navigateToHome();
@@ -72,11 +72,11 @@ class AuthPresenter {
     if (errorMessage == null) {
       _view.showMessage('Login successful!');
       // Save credentials locally
-      final user = _firebaseAuth.currentUser;
+      final user = _supabase.auth.currentUser;
       if (user != null) {
         await _localStorageService.saveLastEmail(username);
         await _localStorageService.saveLastPassword(password);
-        await _localStorageService.addRecentUid(user.uid);
+        await _localStorageService.addRecentUid(user.id);
         await loadRecentUsers(); // Refresh recent users list
       }
       _view.navigateToHome();

@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 enum RelationshipType {
@@ -55,23 +54,25 @@ class Relationship {
 
   factory Relationship.fromMap(Map<String, dynamic> data) {
     return Relationship(
-      id: data['id'] as String,
-      userId1: data['userId1'] as String,
-      userId2: data['userId2'] as String,
+      id: data['id'] as String? ?? '',
+      userId1: data['user_id1'] as String? ?? '',
+      userId2: data['user_id2'] as String? ?? '',
       type: RelationshipType.values.firstWhere(
-          (e) => e.toString() == 'RelationshipType.' + data['type'] as String,
+          (e) => e.name == (data['type'] as String? ?? 'none'),
           orElse: () => RelationshipType.none),
-      createdAt: (data['createdAt'] as Timestamp).toDate(),
+      createdAt: data['created_at'] != null 
+          ? DateTime.tryParse(data['created_at'].toString()) ?? DateTime.now() 
+          : DateTime.now(),
     );
   }
 
   Map<String, dynamic> toMap() {
     return {
       'id': id,
-      'userId1': userId1,
-      'userId2': userId2,
-      'type': type.toString().split('.').last,
-      'createdAt': createdAt,
+      'user_id1': userId1,
+      'user_id2': userId2,
+      'type': type.name,
+      'created_at': createdAt.toIso8601String(),
     };
   }
 }

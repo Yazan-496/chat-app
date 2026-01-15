@@ -1,27 +1,49 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/relationship.dart';
-import 'package:my_chat_app/model/user.dart';
+import 'package:my_chat_app/model/user.dart' as app_user;
 import 'package:my_chat_app/data/user_repository.dart';
-import 'package:my_chat_app/model/relationship.dart'; // Ensure Relationship is imported
 import 'package:my_chat_app/model/message.dart';
-// dart:io and firebase_storage removed because not used in this repository file
-import 'package:collection/collection.dart'; // For firstWhereOrNull
-import 'package:my_chat_app/services/notification_service.dart';
+import 'package:collection/collection.dart';
+import 'package:my_chat_app/notification_service.dart';
 import 'dart:convert';
 
-/// Repository for managing chat and message data in Firestore.
-/// It handles all interactions with the 'chats' and 'messages' collections.
+/// Repository for managing chat and message data in Supabase.
+/// It handles all interactions with the 'chats' and 'messages' tables.
 class ChatRepository {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final CollectionReference _relationshipsCollection = FirebaseFirestore.instance.collection('relationships');
+  final SupabaseClient _supabase = Supabase.instance.client;
   final UserRepository _userRepository = UserRepository();
+  final _uuid = const Uuid();
+  static const _chatNamespace = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'; // Random UUID as namespace
 
   /// Retrieves a single chat by its ID.
   Future<Chat?> getChatById(String chatId) async {
-    DocumentSnapshot doc = await _firestore.collection('chats').doc(chatId).get();
-    if (doc.exists) {
-      return Chat.fromMap(doc.data() as Map<String, dynamic>);
+    final data = await _supabase
+        .from('chats')
+        .select()
+        .eq('id', chatId)
+        .maybeSingle();
+    
+    if (data != null) {
+      final chat = Chat.fromMap(data);
+      final currentUserId = _supabase.auth.currentUser?.id;
+      if (currentUserId != null) {
+        final otherParticipantId = chat.participantIds.firstWhereOrNull((id) => id != currentUserId);
+        if (otherParticipantId != null) {
+          final otherUser = await _userRepository.getUser(otherParticipantId);
+          if (otherUser != null) {
+            return chat.copyWith(
+              displayName: otherUser.displayName,
+              profilePictureUrl: otherUser.profilePictureUrl,
+              avatarColor: otherUser.avatarColor,
+              isOnline: otherUser.isOnline,
+              lastSeen: otherUser.lastSeen,
+            );
+          }
+        }
+      }
+      return chat;
     } else {
       return null;
     }
@@ -30,278 +52,266 @@ class ChatRepository {
   /// Retrieves a stream of chats for a given user.
   /// Chats are ordered by the last message time, with the most recent first.
   Stream<List<Chat>> getChatsForUser(String userId) {
-    return _firestore
-        .collection('chats')
-        .where('participantIds', arrayContains: userId)
-        .orderBy('lastMessageTime', descending: true)
-        .snapshots()
-        .asyncMap((snapshot) async {
-      print('ChatRepository: Received chat snapshot with ${snapshot.docs.length} documents.');
-      List<Chat> chats = [];
-      for (var doc in snapshot.docs) {
-        final chatData = doc.data() as Map<String, dynamic>;
-        final participantIds = List<String>.from(chatData['participantIds']);
-        final otherParticipantId = participantIds.firstWhereOrNull((id) => id != userId);
+    return _supabase
+        .from('chats')
+        .stream(primaryKey: ['id'])
+        .order('last_message_time', ascending: false)
+        .asyncMap((data) async {
+          return _processChatsData(data, userId);
+        })
+        .handleError((error) {
+          print('ChatRepository: Stream error in getChatsForUser: $error');
+          return <Chat>[]; // Return empty list on error
+        });
+  }
 
-        if (otherParticipantId == null) {
-          print('ChatRepository: Could not find other participant ID for chat ${doc.id}. Skipping.');
-          continue; // Skip to the next chat document
-        }
+  /// Fetches chats for a user manually (one-time fetch).
+  Future<List<Chat>> fetchChatsForUser(String userId) async {
+    final data = await _supabase
+        .from('chats')
+        .select()
+        .order('last_message_time', ascending: false);
+    return _processChatsData(data, userId);
+  }
 
-        print('ChatRepository: Fetching other user with ID: $otherParticipantId');
-        final otherUser = await _userRepository.getUser(otherParticipantId);
+  /// Common logic to process raw chat data into Chat models.
+  Future<List<Chat>> _processChatsData(List<Map<String, dynamic>> data, String userId) async {
+    print('ChatRepository: Processing ${data.length} chat documents.');
+    List<Chat> chats = [];
+    for (var chatData in data) {
+      final participantIds = List<String>.from(chatData['participant_ids'] ?? []);
+      if (!participantIds.contains(userId)) continue;
 
-        if (otherUser != null) {
-          print('ChatRepository: Found other user: ${otherUser.username}');
-          
-          // Fetch unread messages count for this chat
-          final unreadSnapshot = await doc.reference
-              .collection('messages')
-              .where('receiverId', isEqualTo: userId)
-              .where('status', isNotEqualTo: 'read')
-              .get();
-          final unreadCount = unreadSnapshot.docs.length;
+      final otherParticipantId = participantIds.firstWhereOrNull((id) => id != userId);
 
-          chats.add(Chat(
-            id: doc.id,
-            participantIds: participantIds,
-            otherUserName: otherUser.username,
-            otherUserProfilePictureUrl: otherUser.profilePictureUrl,
-            relationshipType: RelationshipType.values.firstWhereOrNull(
-                (e) => e.toString() == 'RelationshipType.' + (chatData['relationshipType'] as String? ?? 'friend')) ?? RelationshipType.friend,
-            lastMessageTime: chatData['lastMessageTime'] is Timestamp 
-                ? (chatData['lastMessageTime'] as Timestamp).toDate() 
-                : (chatData['lastMessageTime'] != null ? DateTime.tryParse(chatData['lastMessageTime'].toString()) ?? DateTime.now() : DateTime.now()),
-            lastMessageContent: chatData['lastMessageContent'] as String?,
-            unreadCount: unreadCount,
-          ));
-        }
+      if (otherParticipantId == null) {
+        print('ChatRepository: Could not find other participant ID for chat ${chatData['id']}. Skipping.');
+        continue;
       }
-      return chats;
-    });
+
+      final otherUser = await _userRepository.getUser(otherParticipantId);
+
+      if (otherUser != null) {
+        // Fetch unread messages count for this chat
+        final unreadRes = await _supabase
+            .from('messages')
+            .select('id')
+            .eq('chat_id', chatData['id'])
+            .eq('receiver_id', userId)
+            .neq('status', 'read');
+        
+        final unreadCount = unreadRes.length;
+
+        chats.add(Chat(
+          id: chatData['id'],
+          participantIds: participantIds,
+          displayName: otherUser.displayName,
+          profilePictureUrl: otherUser.profilePictureUrl,
+          avatarColor: otherUser.avatarColor,
+          relationshipType: RelationshipType.values.firstWhereOrNull(
+              (e) => e.toString() == 'RelationshipType.' + (chatData['relationship_type'] ?? 'friend').toString()) ?? RelationshipType.friend,
+      lastMessageTime: chatData['last_message_time'] != null 
+          ? DateTime.tryParse(chatData['last_message_time'].toString())?.toUtc() ?? DateTime.now().toUtc() 
+          : DateTime.now().toUtc(),
+          lastMessageContent: chatData['last_message_content'] as String?,
+          unreadCount: unreadCount,
+          isOnline: otherUser.isOnline,
+          lastSeen: otherUser.lastSeen,
+        ));
+      }
+    }
+    return chats;
   }
 
   /// Generates a deterministic chat ID based on two user IDs.
-  /// This ensures that there's only one chat document for any pair of users.
   String _generateChatId(String userId1, String userId2) {
     List<String> userIds = [userId1, userId2]..sort();
-    return userIds.join('_');
+    final combined = userIds.join('_');
+    // Using v5 to generate a deterministic UUID from the combined user IDs
+    return _uuid.v5(_chatNamespace, combined);
   }
 
-  /// Returns a stream of the chat document snapshots for the given chatId.
-  Stream<DocumentSnapshot> getChatDocStream(String chatId) {
-    return _firestore.collection('chats').doc(chatId).snapshots();
+  /// Returns a stream of the chat document for the given chatId.
+  Stream<Map<String, dynamic>> getChatDocStream(String chatId) {
+    return _supabase
+        .from('chats')
+        .stream(primaryKey: ['id'])
+        .eq('id', chatId)
+        .map((data) => data.isNotEmpty ? data.first : {});
   }
 
   /// Creates a new chat between two users if it doesn't already exist.
   Future<Chat> createChat(
-      {required String currentUserId, required User otherUser, required RelationshipType relationshipType}) async {
+      {required String currentUserId, required app_user.User otherUser, required RelationshipType relationshipType}) async {
     final chatId = _generateChatId(currentUserId, otherUser.uid);
-    final chatRef = _firestore.collection('chats').doc(chatId);
-
-    // Check if chat already exists
-    final doc = await chatRef.get();
-    if (doc.exists) {
-      return Chat.fromMap(doc.data() as Map<String, dynamic>); // Corrected casting
+    
+    final existingChat = await getChatById(chatId);
+    if (existingChat != null) {
+      return existingChat;
     }
 
     final newChat = Chat(
       id: chatId,
       participantIds: [currentUserId, otherUser.uid],
-      otherUserName: otherUser.username,
-      otherUserProfilePictureUrl: otherUser.profilePictureUrl,
+      displayName: otherUser.displayName,
+      profilePictureUrl: otherUser.profilePictureUrl,
+      avatarColor: otherUser.avatarColor,
       relationshipType: relationshipType,
-      lastMessageTime: DateTime.now(), // Initial message time
+      lastMessageTime: DateTime.now().toUtc(),
       lastMessageContent: null,
     );
 
-    await chatRef.set(newChat.toMap());
+    await _supabase.from('chats').insert(newChat.toMap());
     return newChat;
   }
 
   /// Sends a new message to a chat.
-  /// Also updates the 'lastMessageTime' and 'lastMessageContent' fields in the chat document.
-  Future<void> sendMessage(Message message) async {
-    final chatRef = _firestore.collection('chats').doc(message.chatId);
-    final messageRef = chatRef.collection('messages').doc(message.id);
-
-    await messageRef.set(message.toMap());
-    // Update the message document to use server timestamp for the 'timestamp' field
-    await messageRef.update({'timestamp': FieldValue.serverTimestamp()});
-
-    // Update status to sent after successful initial write
-    await updateMessageStatus(message.chatId, message.id, MessageStatus.sent);
-    // Update last message in chat for real-time chat list updates
-    await chatRef.update({
-      'lastMessageTime': FieldValue.serverTimestamp(),
-      'lastMessageContent': message.type == MessageType.text ? message.content : '[${message.type.name} message]',
-      'lastMessageSenderId': message.senderId, // Update with sender ID
-      'lastMessageStatus': message.status.toString().split('.').last, // Update with message status
-    });
-
+  Future<String?> sendMessage(Message message) async {
     try {
-      if (NotificationService.relayEndpoint != null) {
-        final receiverDoc = await _firestore.collection('users').doc(message.receiverId).get();
-        final token = (receiverDoc.data() ?? {})['fcmToken'] as String?;
-        if (token != null && token.isNotEmpty) {
-          final title = 'New Message';
-          final body = message.type == MessageType.text ? message.content : '[${message.type.name} message]';
-          final v1 = NotificationService.buildFcmHttpV1Message(
-            token: token,
-            title: title,
-            body: body,
-            data: {
-              'type': 'message',
-              'chatId': message.chatId,
-              'senderId': message.senderId,
-              'title': title,
-              'body': body,
-            },
-          );
-          await NotificationService.sendFcmViaRelay(
-            endpoint: NotificationService.relayEndpoint!,
-            v1Message: v1,
-            headers: {'Accept': 'application/json'},
-          );
-        }
-      }
-    } catch (_) {}
+      await _supabase.from('messages').insert(message.toMap());
+
+      // Update status to sent after successful initial write
+      await updateMessageStatus(message.chatId, message.id, MessageStatus.sent);
+      
+      // Update last message in chat
+      await _supabase.from('chats').update({
+        'last_message_time': DateTime.now().toUtc().toIso8601String(),
+        'last_message_content': message.type == MessageType.text ? message.content : '[${message.type.name} message]',
+        'last_message_sender_id': message.senderId,
+        'last_message_status': message.status.toString().split('.').last,
+      }).eq('id', message.chatId);
+      return null;
+    } catch (e) {
+      print('ChatRepository: Error sending message: $e');
+      return e.toString();
+    }
   }
 
   /// Sets typing status for a given user in a chat.
   Future<void> setTypingStatus(String chatId, String userId, bool isTyping) async {
     try {
-      final chatRef = _firestore.collection('chats').doc(chatId);
-      await chatRef.set({
-        'typing': {userId: isTyping}
-      }, SetOptions(merge: true));
+      // Fetch current typing map
+      final res = await _supabase.from('chats').select('typing_status').eq('id', chatId).single();
+      Map<String, dynamic> typing = Map<String, dynamic>.from(res['typing_status'] ?? {});
+      typing[userId] = isTyping;
+      
+      await _supabase.from('chats').update({
+        'typing_status': typing,
+      }).eq('id', chatId);
     } catch (e) {
       print('ChatRepository: Failed to set typing status for $userId in $chatId: $e');
     }
   }
 
   /// Retrieves a stream of messages for a given chat.
-  /// Messages are ordered by timestamp, with the most recent first.
   Stream<List<Message>> getChatMessages(String chatId) {
-    return _firestore
-        .collection('chats')
-        .doc(chatId)
-        .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .snapshots()
-        .map((snapshot) => snapshot.docs.map((doc) {
-          try {
-            return Message.fromMap(doc.data());
-          } catch (e) {
-            print('ChatRepository: Error parsing message document ${doc.id}: $e. Data: ${doc.data()}');
-            // Return a dummy message or rethrow, depending on desired error handling
-            // For now, returning a dummy message to prevent crash and continue processing other messages
-            return Message(
-              id: doc.id,
-              chatId: chatId, // Use the current chatId
-              senderId: 'unknown',
-              receiverId: 'unknown',
-              type: MessageType.text,
-              content: 'Error loading message',
-              timestamp: DateTime.now(),
-              status: MessageStatus.delivered,
-            );
-          }
-        }).toList());
+    return _supabase
+        .from('messages')
+        .stream(primaryKey: ['id'])
+        .eq('chat_id', chatId)
+        .order('timestamp', ascending: false)
+        .handleError((error) {
+          print('ChatRepository: Stream error: $error');
+        })
+        .map((data) {
+          return data.map((map) {
+            try {
+              return Message.fromMap(map);
+            } catch (e) {
+              print('ChatRepository: Error parsing message: $e');
+              return Message(
+                id: map['id'] ?? 'unknown',
+                chatId: chatId,
+                senderId: 'unknown',
+                receiverId: 'unknown',
+                type: MessageType.text,
+                content: 'Error loading message',
+                timestamp: DateTime.now(),
+                status: MessageStatus.delivered,
+              );
+            }
+          }).toList();
+        });
   }
 
-  /// Updates the status of a specific message (e.g., sent, delivered, read).
+  /// Updates the status of a specific message.
   Future<void> updateMessageStatus(String chatId, String messageId, MessageStatus status) async {
-    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
-      'status': status.toString().split('.').last,
-    });
+    await _supabase
+        .from('messages')
+        .update({'status': status.toString().split('.').last})
+        .eq('id', messageId);
     
-    // Also update the chat document's lastMessageStatus if this might be the last message
-    // To be efficient, we only do this for 'read' or 'delivered' statuses
     if (status == MessageStatus.read || status == MessageStatus.delivered) {
-      await _firestore.collection('chats').doc(chatId).update({
-        'lastMessageStatus': status.toString().split('.').last,
-      });
+      await _supabase
+          .from('chats')
+          .update({'last_message_status': status.toString().split('.').last})
+          .eq('id', chatId);
     }
   }
 
   /// Batch update statuses for multiple messages in a chat.
   Future<void> updateMessagesStatusBatch(String chatId, Map<String, MessageStatus> updates) async {
     if (updates.isEmpty) return;
-    final batch = _firestore.batch();
-    final chatRef = _firestore.collection('chats').doc(chatId);
-    final messagesRef = chatRef.collection('messages');
     
-    MessageStatus? highestStatus;
-    
-    updates.forEach((messageId, status) {
-      final docRef = messagesRef.doc(messageId);
-      batch.update(docRef, {'status': status.toString().split('.').last});
-      
-      // Track the "most advanced" status in the batch to update the chat doc
-      if (highestStatus == null || status.index > highestStatus!.index) {
-        highestStatus = status;
-      }
-    });
-    
-    if (highestStatus != null) {
-      batch.update(chatRef, {'lastMessageStatus': highestStatus.toString().split('.').last});
+    for (var entry in updates.entries) {
+      await updateMessageStatus(chatId, entry.key, entry.value);
     }
-    
-    await batch.commit();
   }
 
   /// Edits the text content of an existing message.
   Future<void> editTextMessage(String chatId, String messageId, String newContent) async {
-    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
-      'editedContent': newContent,
-    });
+    await _supabase.from('messages').update({
+      'edited_content': newContent,
+    }).eq('id', messageId);
   }
 
   /// Marks a message as deleted and replaces content with a placeholder.
   Future<void> deleteMessage(String chatId, String messageId) async {
-    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
+    await _supabase.from('messages').update({
       'deleted': true,
       'content': 'Removed message',
       'type': 'text',
-    });
+    }).eq('id', messageId);
   }
 
   /// Adds an emoji reaction to a message.
   Future<void> addReactionToMessage(String chatId, String messageId, String userId, String emoji) async {
-    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
-      'reactions.$userId': emoji,
-    });
+    // For Supabase, we might want a separate reactions table or use a jsonb column
+    // Assuming 'reactions' is a jsonb column in the 'messages' table
+    final res = await _supabase.from('messages').select('reactions').eq('id', messageId).single();
+    Map<String, dynamic> reactions = Map<String, dynamic>.from(res['reactions'] ?? {});
+    reactions[userId] = emoji;
+    
+    await _supabase.from('messages').update({
+      'reactions': reactions,
+    }).eq('id', messageId);
   }
 
   /// Removes an emoji reaction from a message.
   Future<void> removeReactionFromMessage(String chatId, String messageId, String userId) async {
-    await _firestore.collection('chats').doc(chatId).collection('messages').doc(messageId).update({
-      'reactions.${userId}': FieldValue.delete(),
-    });
+    final res = await _supabase.from('messages').select('reactions').eq('id', messageId).single();
+    Map<String, dynamic> reactions = Map<String, dynamic>.from(res['reactions'] ?? {});
+    reactions.remove(userId);
+    
+    await _supabase.from('messages').update({
+      'reactions': reactions,
+    }).eq('id', messageId);
   }
 
   /// Deletes a chat and all its messages.
-  /// This is a critical operation as it recursively deletes subcollections.
   Future<void> deleteChat(String chatId) async {
-    final chatRef = _firestore.collection('chats').doc(chatId);
-
-    // Delete all messages in the subcollection first
-    final messagesSnapshot = await chatRef.collection('messages').get();
-    for (var doc in messagesSnapshot.docs) {
-      await doc.reference.delete();
-    }
+    // Delete all messages for the chat
+    await _supabase.from('messages').delete().eq('chat_id', chatId);
     print('ChatRepository: Deleted all messages for chat $chatId');
 
     // Then delete the chat document itself
-    await chatRef.delete();
+    await _supabase.from('chats').delete().eq('id', chatId);
     print('ChatRepository: Deleted chat document $chatId');
   }
 
   /// Creates or updates a relationship between two users.
   Future<void> createOrUpdateRelationship(String user1Id, String user2Id, RelationshipType type) async {
-    final relationshipId = _generateChatId(user1Id, user2Id); // Re-using chat ID generation for relationship ID
-    final relationshipRef = _relationshipsCollection.doc(relationshipId);
+    final relationshipId = _generateChatId(user1Id, user2Id);
 
     final relationship = Relationship(
       id: relationshipId,
@@ -311,15 +321,15 @@ class ChatRepository {
       createdAt: DateTime.now(),
     );
 
-    await relationshipRef.set(relationship.toMap(), SetOptions(merge: true));
+    await _supabase.from('relationships').upsert(relationship.toMap());
   }
 
   /// Retrieves a specific relationship between two users.
   Future<Relationship?> getRelationship(String user1Id, String user2Id) async {
     final relationshipId = _generateChatId(user1Id, user2Id);
-    final doc = await _relationshipsCollection.doc(relationshipId).get();
-    if (doc.exists) {
-      return Relationship.fromMap(doc.data() as Map<String, dynamic>);
+    final data = await _supabase.from('relationships').select().eq('id', relationshipId).maybeSingle();
+    if (data != null) {
+      return Relationship.fromMap(data);
     }
     return null;
   }
@@ -327,9 +337,13 @@ class ChatRepository {
   /// Retrieves a stream of a specific relationship between two users.
   Stream<Relationship?> streamRelationship(String user1Id, String user2Id) {
     final relationshipId = _generateChatId(user1Id, user2Id);
-    return _relationshipsCollection.doc(relationshipId).snapshots().map((snapshot) {
-      if (snapshot.exists) {
-        return Relationship.fromMap(snapshot.data() as Map<String, dynamic>);
+    return _supabase
+        .from('relationships')
+        .stream(primaryKey: ['id'])
+        .eq('id', relationshipId)
+        .map((data) {
+      if (data.isNotEmpty) {
+        return Relationship.fromMap(data.first);
       }
       return null;
     });

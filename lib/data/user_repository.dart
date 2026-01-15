@@ -1,72 +1,113 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart' as auth;
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/model/user.dart' as model;
 import 'dart:io';
 
 class UserRepository {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
-  final auth.FirebaseAuth _firebaseAuth = auth.FirebaseAuth.instance;
+  final SupabaseClient _supabase = Supabase.instance.client;
 
-  /// Retrieves a stream of the current user's data from Firestore.
+  /// Retrieves a stream of the current user's data from Supabase.
   /// This allows for real-time updates to the user's profile.
   Stream<model.User?> getCurrentUserStream(String uid) {
-    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
-      if (snapshot.exists) {
-        return model.User.fromMap(snapshot.data()!);
-      } else {
-        return null;
-      }
-    });
+    return _supabase
+        .from('profiles')
+        .stream(primaryKey: ['id'])
+        .eq('id', uid)
+        .map((data) {
+          if (data.isNotEmpty) {
+            return model.User.fromMap(data.first);
+          } else {
+            return null;
+          }
+        });
   }
 
-  /// Retrieves a single instance of a user's data from Firestore by their UID.
+  /// Retrieves a single instance of a user's data from Supabase by their UID.
   Future<model.User?> getUser(String uid) async {
-    print('UserRepository: Fetching user with UID: $uid');
-    DocumentSnapshot doc = await _firestore.collection('users').doc(uid).get();
-    if (doc.exists) {
-      print('UserRepository: User $uid found.');
-      return model.User.fromMap(doc.data() as Map<String, dynamic>);
-    } else {
-      print('UserRepository: User $uid not found.');
+    print('UserRepository: Fetching user with ID: $uid');
+    try {
+      final data = await _supabase
+          .from('profiles')
+          .select()
+          .eq('id', uid)
+          .maybeSingle();
+      
+      if (data != null) {
+        print('UserRepository: User $uid found.');
+        return model.User.fromMap(data);
+      } else {
+        print('UserRepository: User $uid not found.');
+        return null;
+      }
+    } catch (e) {
+      print('UserRepository: Error fetching user $uid: $e');
       return null;
     }
   }
 
-  /// Creates a new user profile in Firestore.
-  /// This is typically called after a successful Firebase Authentication registration.
+  /// Creates a new user profile in Supabase.
+  /// This is typically called after a successful Supabase Authentication registration.
   Future<void> createUserProfile({
     required String uid,
     required String username,
     required String displayName,
   }) async {
-    model.User user = model.User(
-      uid: uid,
-      username: username,
-      displayName: displayName,
-    );
-    await _firestore.collection('users').doc(uid).set(user.toMap());
-  }
-
-  /// Updates the display name of a user in Firestore and optionally in Firebase Authentication.
-  Future<void> updateDisplayName(String uid, String newDisplayName) async {
-    await _firestore.collection('users').doc(uid).update({'displayName': newDisplayName});
-    // Also update Firebase Auth display name if it's the current user
-    if (_firebaseAuth.currentUser?.uid == uid) {
-      await _firebaseAuth.currentUser?.updateDisplayName(newDisplayName);
+    try {
+      // Create a map with the required fields and defaults
+      final profileData = {
+        'id': uid,
+        'username': username,
+        'display_name': displayName,
+        'is_online': false,
+        'last_seen': DateTime.now().toUtc().toIso8601String(),
+      };
+      
+      print('UserRepository: Saving profile to "profiles" table for user $uid');
+      
+      // Use upsert to create or update the profile in the 'profiles' table.
+      // We explicitly target the 'id' column for conflict resolution.
+      await _supabase.from('profiles').upsert(
+        profileData,
+        onConflict: 'id',
+      );
+      
+      print('UserRepository: Successfully saved profile for user $uid');
+    } catch (e) {
+      print('UserRepository: Error creating profile for user $uid: $e');
+      rethrow; // Re-throw to let the caller (AuthService) handle it
     }
   }
 
-  /// Uploads a new profile picture to Firebase Storage and updates the user's profile with the new URL.
+  /// Updates the display name of a user in Supabase.
+  Future<void> updateDisplayName(String uid, String newDisplayName) async {
+    await _supabase
+        .from('profiles')
+        .update({'display_name': newDisplayName})
+        .eq('id', uid);
+  }
+
+  /// Updates the avatar background color of a user in Supabase.
+  Future<void> updateAvatarColor(String uid, int colorValue) async {
+    await _supabase
+        .from('profiles')
+        .update({'avatar_color': colorValue})
+        .eq('id', uid);
+  }
+
+  /// Uploads a new profile picture to Supabase Storage and updates the user's profile with the new URL.
   Future<String?> uploadProfilePicture(String uid, String imagePath) async {
     try {
       File file = File(imagePath);
-      String fileName = 'profile_pictures/$uid/${DateTime.now().millisecondsSinceEpoch}.jpg';
-      UploadTask uploadTask = _storage.ref().child(fileName).putFile(file);
-      TaskSnapshot snapshot = await uploadTask;
-      String downloadUrl = await snapshot.ref.getDownloadURL();
-      await _firestore.collection('users').doc(uid).update({'profilePictureUrl': downloadUrl});
+      String fileName = '$uid/${DateTime.now().millisecondsSinceEpoch}.jpg';
+      
+      await _supabase.storage.from('profile_pictures').upload(
+        fileName,
+        file,
+        fileOptions: const FileOptions(cacheControl: '3600', upsert: false),
+      );
+      
+      final String downloadUrl = _supabase.storage.from('profile_pictures').getPublicUrl(fileName);
+      
+      await _supabase.from('profiles').update({'profile_picture_url': downloadUrl}).eq('id', uid);
       return downloadUrl;
     } catch (e) {
       print('Error uploading profile picture: $e');
@@ -75,81 +116,48 @@ class UserRepository {
   }
 
   /// Searches for users by their username.
-  /// This performs a prefix search. For full-text search capabilities,
-  /// a dedicated search service (e.g., Algolia, Elasticsearch) would be needed
-  /// as Firestore does not directly support 'contains' queries.
   Future<List<model.User>> searchUsersByUsername(String query, String currentUserId) async {
     if (query.isEmpty) {
       return [];
     }
-    // Firestore query for usernames that start with the query string and exclude current user
-    QuerySnapshot snapshot = await _firestore
-        .collection('users')
-        .where('username', isGreaterThanOrEqualTo: query)
-        .where('username', isLessThanOrEqualTo: query + '')
-        .where('uid', isNotEqualTo: currentUserId)
-        .get();
-    return snapshot.docs.map((doc) => model.User.fromMap(doc.data() as Map<String, dynamic>)).toList();
+    
+    final data = await _supabase
+        .from('profiles')
+        .select()
+        .ilike('username', '%$query%')
+        .neq('id', currentUserId)
+        .limit(20);
+    
+    return (data as List).map((u) => model.User.fromMap(u)).toList();
   }
 
-  /// Deletes a user's profile and associated data from Firestore.
-  /// This includes the user document and all chats the user is a participant in.
-  /// NOTE: For a production app, you would typically use a Cloud Function
-  /// to recursively delete subcollections (like messages within chats)
-  /// to avoid manual client-side deletion which can be complex and error-prone.
+  /// Checks if a username is already taken in the profiles table.
+  Future<bool> isUsernameTaken(String username) async {
+    // No try-catch here, let the caller handle network errors specifically
+    final data = await _supabase
+        .from('profiles')
+        .select('username')
+        .eq('username', username)
+        .maybeSingle();
+    return data != null;
+  }
+
+  /// Deletes a user's profile and associated data from Supabase.
   Future<void> deleteUserAccount(String uid) async {
-    // 1. Delete user's own document
-    await _firestore.collection('users').doc(uid).delete();
-    print('UserRepository: Deleted user document for $uid');
-
-    // 2. Find and delete chats where the user is a participant
-    QuerySnapshot chatSnapshots = await _firestore
-        .collection('chats')
-        .where('participantIds', arrayContains: uid)
-        .get();
-
-    for (var chatDoc in chatSnapshots.docs) {
-      // IMPORTANT: Recursively delete subcollections (e.g., 'messages') here.
-      // This client-side approach is simplified. In production, use Cloud Functions.
-      // For now, we'll just delete the chat document itself, leaving subcollections behind.
-      // This is a known limitation for simplicity in this example.
-      await chatDoc.reference.delete();
-      print('UserRepository: Deleted chat document ${chatDoc.id}');
-    }
-
-    // 3. Delete profile picture from Firebase Storage (optional)
-    // This would require more sophisticated logic to find all pictures,
-    // especially if you allow multiple uploads. For now, skipping for simplicity.
-    // In a real app, you might use a Cloud Function triggered by user deletion.
+    await _supabase.from('profiles').delete().eq('id', uid);
+    // Note: Supabase doesn't have a direct equivalent to recursive deletion without DB functions/triggers.
+    // For this migration, we'll stick to basic deletion.
   }
 
-  /// Updates a user's online status and last seen timestamp.
+  /// Updates the user's online status and last seen timestamp.
   Future<void> updateUserStatus(String uid, {required bool isOnline}) async {
-    await _firestore.collection('users').doc(uid).update({
-      'isOnline': isOnline,
-      'lastSeen': FieldValue.serverTimestamp(), // Firestore takes care of server-side timestamp
-    });
-  }
-
-  /// Retrieves a stream of a specific user's online status and last seen data.
-  Stream<model.User?> streamUserStatus(String uid) {
-    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
-      if (snapshot.exists) {
-        return model.User.fromMap(snapshot.data()!);
-      } else {
-        return null;
-      }
-    });
-  }
-
-  /// Retrieves a stream of a specific user's complete profile data.
-  Stream<model.User?> streamUserProfile(String uid) {
-    return _firestore.collection('users').doc(uid).snapshots().map((snapshot) {
-      if (snapshot.exists) {
-        return model.User.fromMap(snapshot.data()!);
-      } else {
-        return null;
-      }
-    });
+    try {
+      await _supabase.from('profiles').update({
+        'is_online': isOnline,
+        'last_seen': DateTime.now().toUtc().toIso8601String(),
+      }).eq('id', uid);
+    } catch (e) {
+      print('UserRepository: Error updating status for $uid: $e');
+    }
   }
 }

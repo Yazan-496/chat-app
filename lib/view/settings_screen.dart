@@ -3,12 +3,13 @@ import 'package:my_chat_app/presenter/settings_presenter.dart';
 import 'package:my_chat_app/utils/app_theme.dart';
 import 'package:my_chat_app/main.dart';
 import 'package:my_chat_app/view/settings_view.dart';
-import 'package:file_picker/file_picker.dart'; // New import
-import 'package:flutter_colorpicker/flutter_colorpicker.dart'; // New import
-import 'package:firebase_auth/firebase_auth.dart'; // New import
-import 'package:my_chat_app/services/local_storage_service.dart'; // New import
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:my_chat_app/services/local_storage_service.dart';
 import 'package:flutter/services.dart';
-import 'package:my_chat_app/services/notification_service.dart';
+import 'package:my_chat_app/notification_service.dart';
+import 'package:my_chat_app/data/user_repository.dart';
 
 class SettingsScreen extends StatefulWidget {
   final Function(ThemeModeType) onThemeChanged;
@@ -21,12 +22,12 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> implements SettingsView {
   late SettingsPresenter _presenter;
-  final FirebaseAuth _firebaseAuth = FirebaseAuth.instance; // New instance
-  final LocalStorageService _localStorageService = LocalStorageService(); // New instance
+  final SupabaseClient _supabase = Supabase.instance.client;
+  final LocalStorageService _localStorageService = LocalStorageService();
+  final UserRepository _userRepository = UserRepository();
   ThemeModeType _selectedThemeMode = ThemeModeType.system;
   String _selectedLanguageCode = 'en';
-  Color _currentAvatarColor = Colors.blue.shade300; // Default avatar color
-  String? _fcmToken;
+  Color _currentAvatarColor = Colors.blue.shade300;
 
   @override
   void initState() {
@@ -35,16 +36,6 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
     _presenter.loadSettings();
     _loadAvatarColor();
     _loadLanguageCode();
-    NotificationService().getToken().then((token) {
-      if (mounted) {
-        setState(() {
-          _fcmToken = token;
-        });
-      }
-      if (token != null) {
-        debugPrint('FCM Token: $token');
-      }
-    });
   }
 
   Future<void> _loadLanguageCode() async {
@@ -53,7 +44,6 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
       setState(() {
         _selectedLanguageCode = languageCode;
       });
-      // Find MainAppState and set locale
       final mainApp = context.findAncestorStateOfType<MainAppState>();
       if (mainApp != null) {
         mainApp.setLocale(Locale(languageCode));
@@ -62,14 +52,17 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
   }
 
   Future<void> _loadAvatarColor() async {
-    final userId = _firebaseAuth.currentUser?.uid;
-    if (userId != null) {
-      final storedColor = await _localStorageService.getAvatarColor(userId);
-      if (storedColor != null) {
-        setState(() {
-          _currentAvatarColor = Color(storedColor);
-        });
-      }
+    final user = _supabase.auth.currentUser;
+    if (user != null) {
+      // First try to load from UserRepository (Supabase)
+      final profile = await _userRepository.getUser(user.id);
+      if (profile != null && profile.avatarColor != null) {
+        if (mounted) {
+          setState(() {
+            _currentAvatarColor = Color(profile.avatarColor!);
+          });
+        }
+      } 
     }
   }
 
@@ -194,59 +187,51 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
               ),
             ),
           ),
-          ListTile(
-            title: const Text('FCM Token'),
-            subtitle: Text(
-              _fcmToken ?? 'Fetching…',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.copy),
-              onPressed: _fcmToken == null
-                  ? null
-                  : () async {
-                      await Clipboard.setData(ClipboardData(text: _fcmToken!));
-                      showMessage('FCM token copied to clipboard');
-                    },
-            ),
-          ),
         ],
       ),
     );
   }
 
   void _showColorPicker() {
+    Color tempColor = _currentAvatarColor;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Pick a color'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: _currentAvatarColor,
-            onColorChanged: (color) {
-              setState(() {
-                _currentAvatarColor = color;
-              });
-            },
-            enableAlpha: false,
-            labelTypes: const [],
-            pickerAreaHeightPercent: 0.8,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Pick a color'),
+          content: SingleChildScrollView(
+            child: ColorPicker(
+              pickerColor: tempColor,
+              onColorChanged: (color) {
+                setDialogState(() {
+                  tempColor = color;
+                });
+              },
+              enableAlpha: false,
+              labelTypes: const [],
+              pickerAreaHeightPercent: 0.8,
+            ),
           ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Got it'),
+              onPressed: () async {
+                Navigator.of(context).pop();
+                final userId = _supabase.auth.currentUser?.id;
+                if (userId != null) {
+                  setState(() {
+                    _currentAvatarColor = tempColor;
+                  });
+                  // Save to Supabase - ensure alpha is 255
+                  final colorToSave = tempColor.withAlpha(255).value;
+                  await _userRepository.updateAvatarColor(userId, colorToSave);
+                  // Notify presenter to refresh any dependent views
+                  _presenter.updateView(); 
+                }
+              },
+            ),
+          ],
         ),
-        actions: <Widget>[
-          TextButton(
-            child: const Text('Got it'),
-            onPressed: () async {
-              Navigator.of(context).pop();
-              final userId = _firebaseAuth.currentUser?.uid;
-              if (userId != null) {
-                await _localStorageService.saveAvatarColor(userId, _currentAvatarColor.value);
-                _presenter.updateView(); // Notify presenter to refresh any dependent views
-              }
-            },
-          ),
-        ],
       ),
     );
   }

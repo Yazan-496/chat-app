@@ -4,7 +4,6 @@ A new Flutter project.
 
 ## FCM testing (quick examples)
 
-Use these example payloads when sending test messages from the Firebase Console or your server.
 
 - Basic notification (shows system default sound when app is backgrounded/killed):
 

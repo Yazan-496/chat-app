@@ -1,19 +1,29 @@
 import 'dart:io';
-import 'package:firebase_storage/firebase_storage.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 class MediaService {
-  final FirebaseStorage _storage = FirebaseStorage.instance;
+  final SupabaseClient _supabase = Supabase.instance.client;
   final AudioRecorder _audioRecorder = AudioRecorder();
 
   Future<String?> uploadFile(String filePath, String storagePath) async {
     try {
-      File file = File(filePath);
-      UploadTask uploadTask = _storage.ref().child(storagePath).putFile(file);
-      TaskSnapshot snapshot = await uploadTask;
-      String downloadUrl = await snapshot.ref.getDownloadURL();
-      return downloadUrl;
+      final file = File(filePath);
+      
+      // storagePath format: "bucket_name/path/to/file.ext"
+      final pathParts = storagePath.split('/');
+      final bucketName = pathParts.first;
+      final fileRelativePath = pathParts.sublist(1).join('/');
+      
+      await _supabase.storage.from(bucketName).upload(
+        fileRelativePath,
+        file,
+        fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
+      );
+
+      final String publicUrl = _supabase.storage.from(bucketName).getPublicUrl(fileRelativePath);
+      return publicUrl;
     } catch (e) {
       print('Error uploading file: $e');
       return null;
