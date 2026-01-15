@@ -115,20 +115,48 @@ class UserRepository {
     }
   }
 
-  /// Searches for users by their username.
+  /// Searches for users by their username or display name.
   Future<List<model.User>> searchUsersByUsername(String query, String currentUserId) async {
+    print('DEBUG: UserRepository.searchUsersByUsername called with query: "$query", currentUserId: "$currentUserId"');
     if (query.isEmpty) {
+      print('DEBUG: Query is empty, returning empty list');
       return [];
     }
     
-    final data = await _supabase
-        .from('profiles')
-        .select()
-        .ilike('username', '%$query%')
-        .neq('id', currentUserId)
-        .limit(20);
-    
-    return (data as List).map((u) => model.User.fromMap(u)).toList();
+    try {
+      // Use ilike for case-insensitive partial matching
+      // We search both username and display_name
+      print('DEBUG: Executing Supabase query for "profiles" table...');
+      final data = await _supabase
+          .from('profiles')
+          .select()
+          .or('username.ilike.%$query%,display_name.ilike.%$query%')
+          .neq('id', currentUserId)
+          .limit(20);
+      
+      print('DEBUG: Supabase returned ${data.length} results: $data');
+      
+      final users = (data as List).map((u) => model.User.fromMap(u)).toList();
+      print('DEBUG: Mapped to ${users.length} model.User objects');
+      return users;
+    } catch (e) {
+      print('DEBUG: UserRepository ERROR searching users for query "$query": $e');
+      // If the complex OR query fails, try a simpler one as fallback
+      try {
+        print('DEBUG: Attempting fallback search on username only...');
+        final data = await _supabase
+            .from('profiles')
+            .select()
+            .ilike('username', '%$query%')
+            .neq('id', currentUserId)
+            .limit(20);
+        print('DEBUG: Fallback Supabase returned ${data.length} results: $data');
+        return (data as List).map((u) => model.User.fromMap(u)).toList();
+      } catch (e2) {
+        print('DEBUG: UserRepository FALLBACK ERROR: $e2');
+        return [];
+      }
+    }
   }
 
   /// Checks if a username is already taken in the profiles table.

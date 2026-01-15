@@ -42,9 +42,7 @@ class Chat {
       participantIds: data['participant_ids'] != null ? List<String>.from(data['participant_ids'] as List) : [],
       displayName: 'Unknown', 
       profilePictureUrl: null,
-      avatarColor: data['avatar_color'] != null 
-          ? (data['avatar_color'] as int) | 0xFF000000 
-          : null,
+      avatarColor: null,
       relationshipType: RelationshipType.values.firstWhere(
           (e) => e.toString() == 'RelationshipType.' + (data['relationship_type'] ?? 'friend').toString(),
           orElse: () => RelationshipType.friend),
@@ -73,8 +71,7 @@ class Chat {
       'last_message_content': lastMessageContent,
       'last_message_sender_id': lastMessageSenderId,
       'last_message_status': lastMessageStatus?.toString().split('.').last,
-      'avatar_color': avatarColor,
-      // Note: username, profile_picture_url, is_online, last_seen are NOT in the 'chats' table
+      // Note: username, profile_picture_url, avatar_color, is_online, last_seen are NOT in the 'chats' table
     };
   }
 

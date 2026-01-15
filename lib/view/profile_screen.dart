@@ -132,144 +132,398 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _userProfile == null
-              ? const Center(child: Text('Failed to load profile.'))
-              : Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _userProfile == null
+                ? const Center(child: Text('Failed to load profile.', style: TextStyle(color: Colors.white)))
+                : Column(
                     children: [
-                      GestureDetector(
-                        onTap: _isCurrentUser ? _pickImage : null,
-                        child: CircleAvatar(
-                          radius: 50,
-                          backgroundColor: _userProfile?.avatarColor != null 
-                              ? Color(_userProfile!.avatarColor!) 
-                              : Colors.blue.shade300,
-                          backgroundImage: _userProfile?.profilePictureUrl != null
-                              ? NetworkImage(_userProfile!.profilePictureUrl!)
-                              : null,
-                          child: _userProfile?.profilePictureUrl == null
-                              ? Text(
-                                  _userProfile!.displayName.isNotEmpty ? _userProfile!.displayName[0].toUpperCase() : '?',
-                                  style: const TextStyle(color: Colors.white, fontSize: 40, fontWeight: FontWeight.bold),
-                                )
-                              : null,
-                        ),
-                      ),
-                      const SizedBox(height: 16.0),
-                      Text(
-                        'Username: ${_userProfile!.username}',
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8.0),
-                      if (!_isCurrentUser)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                      // Custom Header matching HomeScreen and SettingsScreen
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                        child: Row(
                           children: [
                             Container(
-                              width: 10,
-                              height: 10,
                               decoration: BoxDecoration(
-                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                color: Colors.grey.shade900,
                                 shape: BoxShape.circle,
                               ),
+                              child: IconButton(
+                                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 16),
                             Text(
-                              _userProfile!.isOnline ? 'Online' : _formatLastSeen(_userProfile!.lastSeen),
-                              style: TextStyle(
-                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                              _isCurrentUser ? 'Your Profile' : 'Profile',
+                              style: const TextStyle(
+                                fontSize: 28,
                                 fontWeight: FontWeight.bold,
+                                color: Colors.white,
                               ),
                             ),
                           ],
                         ),
-                      const SizedBox(height: 16.0),
-                      TextField(
-                        controller: _displayNameController,
-                        readOnly: !_isCurrentUser, // Make read-only if not current user
-                        decoration: InputDecoration(
-                          labelText: 'Display Name',
-                          enabled: _isCurrentUser, // Visually disable if not current user
-                        ),
                       ),
-                      if (_isCurrentUser) // Only show update button for current user
-                        const SizedBox(height: 16.0),
-                      if (_isCurrentUser)
-                        ElevatedButton(
-                          onPressed: () {
-                            _presenter.updateDisplayName(_displayNameController.text.trim());
-                          },
-                          child: const Text('Update Display Name'),
-                        ),
-                      if (_isCurrentUser) // Only show delete button for current user
-                        const SizedBox(height: 32.0), // Add some spacing
-                      if (_isCurrentUser)
-                        ElevatedButton(
-                          onPressed: () async {
-                            final confirmDelete = await showDialog<bool>(
-                              context: context,
-                              builder: (BuildContext context) {
-                                return AlertDialog(
-                                  title: const Text('Delete Account'),
-                                  content: const Text('Are you sure you want to delete your account? This action cannot be undone.'),
-                                  actions: <Widget>[
-                                    TextButton(
-                                      onPressed: () => Navigator.of(context).pop(false),
-                                      child: const Text('No'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.of(context).pop(true),
-                                      child: const Text('Yes'),
-                                    ),
-                                  ],
-                                );
-                              },
-                            );
-                            if (confirmDelete == true) {
-                              print('User confirmed account deletion');
-                              _presenter.deleteAccount();
-                            }
-                          },
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.red), // Style as a warning
-                          child: const Text('Delete Account'),
-                        ),
-                      if (!_isCurrentUser) // Display relationship for other users
-                        const SizedBox(height: 16.0),
-                      if (!_isCurrentUser)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
                           children: [
-                            const Text(
-                              'Relationship: ',
-                              style: TextStyle(fontSize: 16),
+                            const SizedBox(height: 24),
+                            // Profile Avatar Section
+                            Center(
+                              child: Stack(
+                                children: [
+                                  GestureDetector(
+                                    onTap: _isCurrentUser ? _pickImage : null,
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: Colors.grey.shade900, width: 4),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(0.5),
+                                            blurRadius: 10,
+                                            offset: const Offset(0, 5),
+                                          ),
+                                        ],
+                                      ),
+                                      child: CircleAvatar(
+                                        radius: 65,
+                                        backgroundColor: _userProfile?.avatarColor != null 
+                                            ? Color(_userProfile!.avatarColor!) 
+                                            : Colors.blue.shade300,
+                                        backgroundImage: _userProfile?.profilePictureUrl != null
+                                            ? NetworkImage(_userProfile!.profilePictureUrl!)
+                                            : null,
+                                        child: _userProfile?.profilePictureUrl == null
+                                            ? Text(
+                                                _userProfile!.displayName.isNotEmpty ? _userProfile!.displayName[0].toUpperCase() : '?',
+                                                style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.bold),
+                                              )
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_isCurrentUser)
+                                    Positioned(
+                                      bottom: 0,
+                                      right: 0,
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueAccent,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(color: Colors.black, width: 3),
+                                        ),
+                                        child: IconButton(
+                                          constraints: const BoxConstraints(),
+                                          padding: const EdgeInsets.all(10),
+                                          icon: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                                          onPressed: _pickImage,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
-                            DropdownButton<RelationshipType>(
-                              value: _currentRelationship?.type ?? RelationshipType.none,
-                              onChanged: (RelationshipType? newValue) {
-                                if (newValue != null) {
-                                  _presenter.updateRelationship(newValue);
-                                }
+                            const SizedBox(height: 24),
+
+                            // User Info Section
+                            if (!_isCurrentUser)
+                              Center(
+                                child: Column(
+                                  children: [
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Container(
+                                          width: 12,
+                                          height: 12,
+                                          decoration: BoxDecoration(
+                                            color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                            shape: BoxShape.circle,
+                                            boxShadow: _userProfile!.isOnline ? [
+                                              BoxShadow(
+                                                color: Colors.greenAccent.withOpacity(0.5),
+                                                blurRadius: 8,
+                                                spreadRadius: 2,
+                                              )
+                                            ] : null,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Text(
+                                          _userProfile!.isOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
+                                          style: TextStyle(
+                                            color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 24),
+                                  ],
+                                ),
+                              ),
+
+                            _buildInfoTile(
+                              title: 'Username',
+                              value: '@${_userProfile!.username}',
+                              icon: Icons.alternate_email,
+                            ),
+                            const SizedBox(height: 16),
+
+                            _buildEditableTile(
+                              title: 'Display Name',
+                              controller: _displayNameController,
+                              icon: Icons.person_outline,
+                              isEditable: _isCurrentUser,
+                              onUpdate: () {
+                                _presenter.updateDisplayName(_displayNameController.text.trim());
                               },
-                              items: RelationshipType.values
-                                  .map<DropdownMenuItem<RelationshipType>>(
-                                      (RelationshipType type) {
-                                return DropdownMenuItem<RelationshipType>(
-                                  value: type,
-                                  child: Text(type.toString().split('.').last),
-                                );
-                              }).toList(),
                             ),
+                            const SizedBox(height: 16),
+
+                            if (!_isCurrentUser)
+                              _buildRelationshipTile(),
+
+                            const SizedBox(height: 32),
+                            if (_isCurrentUser) ...[
+                              const Divider(color: Colors.grey, thickness: 0.5),
+                              const SizedBox(height: 16),
+                              _buildDangerTile(
+                                title: 'Delete Account',
+                                subtitle: 'This action is permanent and cannot be undone',
+                                icon: Icons.delete_forever,
+                                onTap: () async {
+                                  final confirmDelete = await showDialog<bool>(
+                                    context: context,
+                                    builder: (BuildContext context) {
+                                      return AlertDialog(
+                                        backgroundColor: Colors.grey.shade900,
+                                        title: const Text('Delete Account', style: TextStyle(color: Colors.white)),
+                                        content: const Text('Are you sure you want to delete your account? This action cannot be undone.', style: TextStyle(color: Colors.grey)),
+                                        actions: <Widget>[
+                                          TextButton(
+                                            onPressed: () => Navigator.of(context).pop(false),
+                                            child: const Text('Cancel', style: TextStyle(color: Colors.blueAccent)),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.of(context).pop(true),
+                                            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  );
+                                  if (confirmDelete == true) {
+                                    _presenter.deleteAccount();
+                                  }
+                                },
+                              ),
+                            ],
+                            const SizedBox(height: 32),
                           ],
                         ),
+                      ),
                     ],
                   ),
+      ),
+    );
+  }
+
+  Widget _buildInfoTile({required String title, required String value, required IconData icon}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.blueAccent.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: Colors.blueAccent, size: 22),
+          ),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEditableTile({
+    required String title,
+    required TextEditingController controller,
+    required IconData icon,
+    required bool isEditable,
+    VoidCallback? onUpdate,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.blueAccent.withOpacity(0.1),
+                  shape: BoxShape.circle,
                 ),
+                child: Icon(icon, color: Colors.blueAccent, size: 22),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: controller,
+                      readOnly: !isEditable,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                        border: InputBorder.none,
+                        hintText: 'Enter $title',
+                        hintStyle: TextStyle(color: Colors.grey.shade700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isEditable)
+                IconButton(
+                  icon: const Icon(Icons.check_circle_outline, color: Colors.blueAccent),
+                  onPressed: onUpdate,
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRelationshipTile() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade900,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.purpleAccent.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.people_outline, color: Colors.purpleAccent, size: 22),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Relationship',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                DropdownButton<RelationshipType>(
+                  value: _currentRelationship?.type ?? RelationshipType.none,
+                  dropdownColor: Colors.grey.shade900,
+                  underline: const SizedBox(),
+                  isExpanded: true,
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  onChanged: (RelationshipType? newValue) {
+                    if (newValue != null) {
+                      _presenter.updateRelationship(newValue);
+                    }
+                  },
+                  items: RelationshipType.values
+                      .map<DropdownMenuItem<RelationshipType>>(
+                          (RelationshipType type) {
+                    return DropdownMenuItem<RelationshipType>(
+                      value: type,
+                      child: Text(type.toString().split('.').last.toUpperCase()),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDangerTile({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.redAccent.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.redAccent.withOpacity(0.1)),
+      ),
+      child: ListTile(
+        onTap: onTap,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.redAccent.withOpacity(0.1),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: Colors.redAccent, size: 24),
+        ),
+        title: Text(
+          title,
+          style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 16),
+        ),
+        subtitle: Text(
+          subtitle,
+          style: TextStyle(color: Colors.redAccent.withOpacity(0.7), fontSize: 13),
+        ),
+        trailing: const Icon(Icons.chevron_right, color: Colors.redAccent),
+      ),
     );
   }
 }

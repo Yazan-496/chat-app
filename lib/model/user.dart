@@ -1,5 +1,6 @@
 class User {
   final String uid;
+  String get id => uid;
   final String username;
   String displayName;
   String? profilePictureUrl;

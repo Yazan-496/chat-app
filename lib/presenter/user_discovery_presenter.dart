@@ -19,14 +19,18 @@ class UserDiscoveryPresenter {
   List<app_user.User> get searchResults => _searchResults;
 
   Future<void> searchUsers(String query) async {
+    print('DEBUG: UserDiscoveryPresenter.searchUsers called with query: "$query"');
     _view.showLoading();
     try {
       final user = _supabase.auth.currentUser;
+      print('DEBUG: Current user ID: ${user?.id}');
       // We allow searching even if not authenticated (using anon key)
       // to support the user's request for unauthorized profile access.
       _searchResults = await _userRepository.searchUsersByUsername(query, user?.id ?? '');
+      print('DEBUG: Presenter received ${_searchResults.length} users from repository');
       _view.displaySearchResults(_searchResults);
     } catch (e) {
+      print('DEBUG: UserDiscoveryPresenter ERROR: $e');
       _view.showMessage('Error searching users: $e');
     }
     _view.hideLoading();

@@ -14,8 +14,11 @@ import 'package:my_chat_app/chat_screen.dart';
 import 'package:my_chat_app/view/home_view.dart';
 import 'package:my_chat_app/view/profile_screen.dart';
 import 'package:my_chat_app/view/settings_screen.dart';
-import 'package:my_chat_app/view/auth_screen.dart';
 import 'package:my_chat_app/view/user_discovery_screen.dart';
+import 'package:my_chat_app/view/auth_screen.dart';
+import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
+import 'package:my_chat_app/view/user_discovery_view.dart';
+import 'package:my_chat_app/view/relationship_selection_dialog.dart';
 import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/services/bubble_service.dart';
 import 'package:my_chat_app/services/presence_service.dart';
@@ -31,13 +34,19 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver implements HomeView {
-  late HomePresenter _presenter;
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver implements HomeView, UserDiscoveryView {
+  HomePresenter? _presenter;
+  UserDiscoveryPresenter? _discoveryPresenter;
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
   final SupabaseClient _supabase = Supabase.instance.client;
   final EncryptionService _encryptionService = EncryptionService();
   final LocalStorageService _localStorageService = LocalStorageService();
   List<Chat> _chats = [];
+  List<app_user.User> _discoveredUsers = [];
   bool _isLoading = false;
+  bool _isSearching = false;
+  bool _isDiscoveryLoading = false;
   app_user.User? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
   StreamSubscription<String>? _bubbleNavigationSubscription;
@@ -47,10 +56,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   @override
   void initState() {
     super.initState();
+    _discoveryPresenter = UserDiscoveryPresenter(this);
+    _presenter = HomePresenter(this);
     _initialChatId = widget.initialChatId;
     WidgetsBinding.instance.addObserver(this);
-    _presenter = HomePresenter(this);
-    _presenter.loadChats();
+    _presenter?.loadChats();
     _loadCurrentUserProfile();
     _checkNotificationLaunch();
     
@@ -81,8 +91,104 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     _navigationSubscription?.cancel();
     _bubbleNavigationSubscription?.cancel();
     _statusUpdateTimer?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  // Shared View implementation
+  @override
+  void showLoading() {
+    setState(() {
+      if (_isSearching) {
+        _isDiscoveryLoading = true;
+      } else {
+        _isLoading = true;
+      }
+    });
+  }
+
+  @override
+  void hideLoading() {
+    setState(() {
+      _isDiscoveryLoading = false;
+      _isLoading = false;
+    });
+  }
+
+  @override
+  void showMessage(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade900,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.4),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, color: Colors.blueAccent, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          margin: EdgeInsets.only(
+            bottom: MediaQuery.of(context).size.height - 160,
+            left: 16,
+            right: 16,
+          ),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  @override
+  void displaySearchResults(List<app_user.User> users) {
+    setState(() {
+      _discoveredUsers = users;
+    });
+  }
+
+  @override
+  void updateView() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void updateUserStatus(String userId, bool isOnline, DateTime? lastSeen) {
+    if (mounted) {
+      setState(() {
+        for (int i = 0; i < _chats.length; i++) {
+          if (_chats[i].participantIds.contains(userId)) {
+            _chats[i] = _chats[i].copyWith(
+              isOnline: isOnline,
+              lastSeen: lastSeen,
+            );
+          }
+        }
+      });
+    }
   }
 
   @override
@@ -134,64 +240,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   }
 
   @override
-  void showLoading() {
-    setState(() {
-      _isLoading = true;
-    });
-  }
-
-  @override
-  void hideLoading() {
-    setState(() {
-      _isLoading = false;
-    });
-  }
-
-  @override
-  void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade900,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.4),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.info_outline, color: Colors.blueAccent, size: 20),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  message,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-              ),
-            ],
-          ),
-        ),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        margin: EdgeInsets.only(
-          bottom: MediaQuery.of(context).size.height - 160,
-          left: 16,
-          right: 16,
-        ),
-        duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  @override
   void displayChats(List<Chat> chats) {
     setState(() {
       _chats = chats;
@@ -224,7 +272,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     } else {
       debugPrint('HomeScreen: Target chat $pendingId not found in loaded chats. Fetching directly.');
       showLoading();
-      final fetchedChat = await _presenter.getChat(pendingId);
+      final fetchedChat = await _presenter?.getChat(pendingId);
       hideLoading();
       
       if (fetchedChat != null && mounted) {
@@ -261,29 +309,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   }
 
   @override
-  void updateView() {
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  @override
-  void updateUserStatus(String userId, bool isOnline, DateTime? lastSeen) {
-    if (mounted) {
-      setState(() {
-        for (int i = 0; i < _chats.length; i++) {
-          if (_chats[i].participantIds.contains(userId)) {
-            _chats[i] = _chats[i].copyWith(
-              isOnline: isOnline,
-              lastSeen: lastSeen,
-            );
-          }
-        }
-      });
-    }
-  }
-
-  @override
   void navigateToLogin() {
     if (mounted) {
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
@@ -292,7 +317,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading || _isNavigationPending()) {
+    if ((_isLoading && !_isSearching) || _isNavigationPending()) {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: Center(
@@ -382,60 +407,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                           shape: BoxShape.circle,
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.camera_alt, color: Colors.white),
+                          icon: const Icon(Icons.settings, color: Colors.white),
                           onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => SettingsScreen(
-                      onThemeChanged: (mode) {
-                        final mainApp = context.findAncestorStateOfType<MainAppState>();
-                        if (mainApp != null) {
-                          mainApp.setThemeMode(mode);
-                        }
-                      },
-                    ),
-                  ),
-                ).then((_) => _loadCurrentUserProfile());
-              },
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade900,
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.edit, color: Colors.white),
-                          onPressed: () {
-                             Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (context) => const UserDiscoveryScreen(),
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => SettingsScreen(
+                                  onThemeChanged: (mode) {
+                                    final mainApp = context.findAncestorStateOfType<MainAppState>();
+                                    if (mainApp != null) {
+                                      mainApp.setThemeMode(mode);
+                                    }
+                                  },
                                 ),
-                              );
-                          }, // New chat action
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade900,
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.logout, color: Colors.white),
-                          onPressed: () async {
-                            final userId = _supabase.auth.currentUser?.id;
-                            if (userId != null) {
-                              final presenceService = PresenceService();
-                              await presenceService.setUserOffline(userId);
-                            }
-                            await _supabase.auth.signOut();
-                            if (!mounted) return;
-                            Navigator.of(context).pushAndRemoveUntil(
-                              MaterialPageRoute(builder: (_) => const AuthScreen()),
-                              (route) => false,
-                            );
+                              ),
+                            ).then((_) => _loadCurrentUserProfile());
                           },
                         ),
                       ),
@@ -455,15 +440,40 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   color: Colors.grey.shade900,
                   borderRadius: BorderRadius.circular(24.0),
                 ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.search, color: Colors.grey),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Search',
-                      style: TextStyle(color: Colors.grey.shade600, fontSize: 16),
-                    ),
-                  ],
+                child: TextField(
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  style: const TextStyle(color: Colors.white),
+                  onChanged: (value) {
+                    final trimmedValue = value.trim();
+                    setState(() {
+                      _isSearching = trimmedValue.isNotEmpty;
+                      if (!_isSearching) {
+                        _discoveredUsers = [];
+                      }
+                    });
+                    if (_isSearching) {
+                      _discoveryPresenter?.searchUsers(trimmedValue);
+                    }
+                  },
+                  decoration: InputDecoration(
+                    border: InputBorder.none,
+                    hintText: 'Search chats or discover users...',
+                    hintStyle: TextStyle(color: Colors.grey.shade600, fontSize: 16),
+                    icon: const Icon(Icons.search, color: Colors.grey),
+                    suffixIcon: _isSearching 
+                        ? IconButton(
+                            icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _isSearching = false;
+                                _discoveredUsers = [];
+                              });
+                            },
+                          )
+                        : null,
+                  ),
                 ),
               ),
             ),
@@ -501,19 +511,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             Expanded(
               child: RefreshIndicator(
                 onRefresh: () async {
-                  await _presenter.refreshChats();
+                  await _presenter?.refreshChats();
                 },
-                child: _isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : _chats.isEmpty
-                        ? const Center(child: Text('No chats yet.', style: TextStyle(color: Colors.grey)))
-                        : ListView.builder(
-                            itemCount: _chats.length,
-                            itemBuilder: (context, index) {
-                              final chat = _chats[index];
-                              return _buildChatItem(chat);
-                            },
-                          ),
+                child: _isSearching 
+                    ? _buildSearchResults()
+                    : _isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : _chats.isEmpty
+                            ? const Center(child: Text('No chats yet.', style: TextStyle(color: Colors.grey)))
+                            : ListView.builder(
+                                itemCount: _chats.length,
+                                itemBuilder: (context, index) {
+                                  final chat = _chats[index];
+                                  return _buildChatItem(chat);
+                                },
+                              ),
               ),
             ),
           ],
@@ -586,6 +598,81 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildSearchResults() {
+    final query = _searchController.text.toLowerCase();
+    final filteredChats = _chats.where((chat) => 
+      chat.displayName.toLowerCase().contains(query)
+    ).toList();
+
+    final discoveryResults = _discoveredUsers.where((user) => 
+      !_chats.any((chat) => chat.participantIds.contains(user.id))
+    ).toList();
+
+    return ListView(
+      children: [
+        if (filteredChats.isNotEmpty) ...[
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('Your Chats', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1.2)),
+          ),
+          ...filteredChats.map((chat) => _buildChatItem(chat)),
+        ],
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 24, 16, 8),
+          child: Text('Discover New Users', style: TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 1.2)),
+        ),
+        if (_isDiscoveryLoading)
+          const Center(child: Padding(
+            padding: EdgeInsets.all(24.0),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ))
+        else if (discoveryResults.isEmpty && query.length > 0)
+          Center(child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              children: [
+                Icon(Icons.search_off, color: Colors.grey.shade700, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  _discoveredUsers.any((u) => _chats.any((c) => c.participantIds.contains(u.id)))
+                      ? 'User is already in your chats'
+                      : 'No new users found for "$query"',
+                  style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
+                ),
+              ],
+            ),
+          ))
+        else if (discoveryResults.isEmpty)
+          Center(child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Text('Type a username or display name to find users', style: TextStyle(color: Colors.grey.shade600, fontSize: 14)),
+          ))
+        else
+          ...discoveryResults.map((user) => ListTile(
+            leading: CircleAvatar(
+              backgroundColor: user.avatarColor != null ? Color(user.avatarColor!) : Colors.blue.shade300,
+              backgroundImage: user.profilePictureUrl != null ? NetworkImage(user.profilePictureUrl!) : null,
+              child: user.profilePictureUrl == null ? Text(user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '') : null,
+            ),
+            title: Text(user.displayName, style: const TextStyle(color: Colors.white)),
+            subtitle: Text('@${user.username}', style: TextStyle(color: Colors.grey.shade500)),
+            trailing: IconButton(
+              icon: const Icon(Icons.person_add, color: Colors.blueAccent),
+              onPressed: () async {
+                final relationshipType = await showDialog<RelationshipType>(
+                  context: context,
+                  builder: (BuildContext context) => const RelationshipSelectionDialog(),
+                );
+                if (relationshipType != null) {
+                  _discoveryPresenter?.addUserToChatList(user, relationshipType);
+                }
+              },
+            ),
+          )),
+      ],
     );
   }
 
@@ -785,7 +872,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                           (() {
                               String displayContent;
                               if (chat.lastMessageContent == null) {
-                                displayContent = 'Sent an attachment';
+                                displayContent = 'No Messages';
                               } else {
                                 final raw = chat.lastMessageContent!;
                                 final looksLikeAttachment = raw.trim().startsWith('[') && raw.trim().endsWith(']');
@@ -803,9 +890,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                                 }
                               }
                               final isMe = chat.lastMessageSenderId == _supabase.auth.currentUser?.id;
-                              final senderLabel = isMe
+                              final senderLabel = chat.lastMessageContent != null ? isMe
                                   ? 'You: '
-                                  : (displayContent.contains('sent an attachment') ? '' : '${chat.displayName.split(' ').first}: ');
+                                  : (displayContent.contains('sent an attachment') ? '' : '${chat.displayName.split(' ').first}: ') : "";
                               final prefix = senderLabel;
                               return '$prefix$displayContent';
                             })(),
@@ -921,7 +1008,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
 
     if (confirm == true) {
-      _presenter.deleteChat(chat.id);
+      _presenter?.deleteChat(chat.id);
     }
   }
 
