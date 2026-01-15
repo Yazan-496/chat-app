@@ -15,6 +15,7 @@ import 'package:my_chat_app/notification_service.dart';
 import 'package:flutter/services.dart';
 import 'package:my_chat_app/services/sound_service.dart';
 import 'package:my_chat_app/supabase_client.dart'; // Import SupabaseManager
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/utils/toast_utils.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -36,6 +37,12 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   int _emojiTabIndex = 0; // 0: Yazan, 1: Aline, 2: Both
   final LocalStorageService _localStorageService = LocalStorageService(); // New instance
   Timer? _statusUpdateTimer;
+  RealtimeChannel? _statusChannel;
+  bool _isConnected = true;
+  bool _showRestoredMessage = false;
+  Timer? _restoredMessageTimer;
+  Timer? _connectionDebounceTimer;
+  final SupabaseClient _supabase = Supabase.instance.client;
 
   // New emoji reactions list
   final List<String> _emojiReactions = [
@@ -58,6 +65,41 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     NotificationService.flutterLocalNotificationsPlugin.cancel(widget.chat.id.hashCode + 1);
     _presenter.loadMessages();
     _presenter.scheduleReadMark();
+
+    // Listen to Supabase connection status using a channel
+    _statusChannel = _supabase.channel('chat_conn_tracker').subscribe((status, error) {
+      if (mounted) {
+        final newConnected = status == RealtimeSubscribeStatus.subscribed;
+        
+        if (newConnected) {
+          _connectionDebounceTimer?.cancel();
+          if (!_isConnected) {
+            // Connection restored
+            setState(() {
+              _isConnected = true;
+              _showRestoredMessage = true;
+            });
+            _restoredMessageTimer?.cancel();
+            _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
+              if (mounted) {
+                setState(() => _showRestoredMessage = false);
+              }
+            });
+          }
+        } else {
+          // Debounce connection loss to avoid flickering on minor blips
+          _connectionDebounceTimer?.cancel();
+          _connectionDebounceTimer = Timer(const Duration(seconds: 10), () {
+            if (mounted) {
+              setState(() {
+                _isConnected = false;
+                _showRestoredMessage = false;
+              });
+            }
+          });
+        }
+      }
+    });
 
     _inputFocusNode.addListener(() {
       if (_inputFocusNode.hasFocus && _showEmojiPicker) {
@@ -82,6 +124,11 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     _messageController.dispose();
     _inputFocusNode.dispose();
     _statusUpdateTimer?.cancel();
+    _restoredMessageTimer?.cancel();
+    _connectionDebounceTimer?.cancel();
+    if (_statusChannel != null) {
+      _supabase.removeChannel(_statusChannel!);
+    }
     _presenter.dispose(); // Dispose the presenter
     NotificationService.setActiveChatId(null);
     super.dispose();
@@ -272,7 +319,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                           )
                         : null,
                   ),
-                  if (widget.chat.isOnline)
+                  if (widget.chat.isActuallyOnline && _isConnected)
                     Positioned(
                       bottom: 0,
                       right: 0,
@@ -296,21 +343,22 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                     widget.chat.displayName,
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
-                  if (_presenter.otherUserTyping && widget.chat.isOnline)
-                    Text(
-                      AppLocalizations.of(context).translate('typing'),
-                      style: const TextStyle(fontSize: 12, color: Colors.white70),
-                    )
-                  else if (_presenter.otherUserInChat && widget.chat.isOnline)
-                    const Text(
-                      'In Chat',
-                      style: TextStyle(fontSize: 12, color: Colors.white70),
-                    )
-                  else
-                    Text(
-                      widget.chat.isOnline ? 'Online' : _formatLastSeen(widget.chat.lastSeen),
-                      style: const TextStyle(fontSize: 12, color: Colors.white70),
-                    ),
+                  if (_isConnected)
+                    if (_presenter.otherUserTyping && widget.chat.isActuallyOnline)
+                      Text(
+                        AppLocalizations.of(context).translate('typing'),
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      )
+                    else if (_presenter.otherUserInChat && widget.chat.isActuallyOnline)
+                      const Text(
+                        'In Chat',
+                        style: TextStyle(fontSize: 12, color: Colors.white70),
+                      )
+                    else
+                      Text(
+                        widget.chat.isActuallyOnline ? 'Online' : _formatLastSeen(widget.chat.lastSeen),
+                        style: const TextStyle(fontSize: 12, color: Colors.white70),
+                      ),
                 ],
               ),
             ],
@@ -344,6 +392,44 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         color: const Color(0xFF121212), // Solid dark background
         child: Column(
           children: [
+            // No Internet Connection Banner
+            if (!_isConnected)
+              Container(
+                width: double.infinity,
+                color: Colors.redAccent.withOpacity(0.9),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.wifi_off, color: Colors.white, size: 14),
+                    SizedBox(width: 8),
+                    Text(
+                      'No internet connection',
+                      style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Connection Restored Banner
+            if (_showRestoredMessage)
+              Container(
+                width: double.infinity,
+                color: Colors.green.withOpacity(0.9),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.white, size: 14),
+                    SizedBox(width: 8),
+                    Text(
+                      'Connection restored',
+                      style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+
             // Spacer for AppBar since extendBodyBehindAppBar is true
             SizedBox(height: kToolbarHeight + MediaQuery.of(context).padding.top),
             Expanded(
@@ -541,16 +627,16 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     final now = DateTime.now();
     final difference = now.difference(lastSeen);
     
-    if (difference.inMinutes < 1) {
-      return 'Online';
+    if (difference.inSeconds < 30) {
+      return 'Just now';
     } else if (difference.inMinutes < 60) {
-      return '${difference.inMinutes}m ago';
+      return 'Last seen ${difference.inMinutes}m ago';
     } else if (difference.inHours < 24) {
-      return '${difference.inHours}h ago';
+      return 'Last seen ${difference.inHours}h ago';
     } else if (difference.inDays < 7) {
-      return '${difference.inDays}d ago';
+      return 'Last seen ${difference.inDays}d ago';
     } else {
-      return DateFormat('MMM d').format(lastSeen);
+      return 'Last seen ${DateFormat('MMM d').format(lastSeen)}';
     }
   }
 

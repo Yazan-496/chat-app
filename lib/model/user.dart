@@ -20,6 +20,14 @@ class User {
     this.avatarColor,
   });
 
+  bool get isActuallyOnline {
+    if (!isOnline) return false;
+    if (lastSeen == null) return false;
+    final now = DateTime.now();
+    // If last seen is within 5 minutes, consider online to allow for minor connection gaps
+    return now.difference(lastSeen!).inMinutes < 5;
+  }
+
   // Factory constructor for creating a User from a map (e.g., from Firestore)
   factory User.fromMap(Map<String, dynamic> data) {
     DateTime? lastSeen;

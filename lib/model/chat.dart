@@ -16,6 +16,14 @@ class Chat {
   DateTime? lastSeen;
   int unreadCount;
 
+  bool get isActuallyOnline {
+    if (!isOnline) return false;
+    if (lastSeen == null) return false;
+    final now = DateTime.now();
+    // If last seen is within 5 minutes, consider online to allow for minor connection gaps
+    return now.difference(lastSeen!).inMinutes < 5;
+  }
+
   String getOtherUserId(String currentUserId) {
     return participantIds.firstWhere((id) => id != currentUserId);
   }

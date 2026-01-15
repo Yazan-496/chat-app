@@ -29,6 +29,11 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   final SupabaseClient _supabase = Supabase.instance.client;
   Relationship? _currentRelationship;
   Timer? _statusUpdateTimer;
+  RealtimeChannel? _statusChannel;
+  bool _isConnected = true;
+  bool _showRestoredMessage = false;
+  Timer? _restoredMessageTimer;
+  Timer? _connectionDebounceTimer;
 
   @override
   void initState() {
@@ -39,6 +44,41 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
     if (!_isCurrentUser) {
       _presenter.loadRelationship();
     }
+
+    // Listen to Supabase connection status using a channel
+    _statusChannel = _supabase.channel('profile_conn_tracker').subscribe((status, error) {
+      if (mounted) {
+        final newConnected = status == RealtimeSubscribeStatus.subscribed;
+        
+        if (newConnected) {
+          _connectionDebounceTimer?.cancel();
+          if (!_isConnected) {
+            // Connection restored
+            setState(() {
+              _isConnected = true;
+              _showRestoredMessage = true;
+            });
+            _restoredMessageTimer?.cancel();
+            _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
+              if (mounted) {
+                setState(() => _showRestoredMessage = false);
+              }
+            });
+          }
+        } else {
+          // Debounce connection loss to avoid flickering on minor blips
+          _connectionDebounceTimer?.cancel();
+          _connectionDebounceTimer = Timer(const Duration(seconds: 10), () {
+            if (mounted) {
+              setState(() {
+                _isConnected = false;
+                _showRestoredMessage = false;
+              });
+            }
+          });
+        }
+      }
+    });
 
     // Periodic timer to refresh "last seen" labels
     _statusUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
@@ -53,6 +93,11 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   @override
   void dispose() {
     _statusUpdateTimer?.cancel();
+    _restoredMessageTimer?.cancel();
+    _connectionDebounceTimer?.cancel();
+    if (_statusChannel != null) {
+      _supabase.removeChannel(_statusChannel!);
+    }
     _displayNameController.dispose();
     super.dispose();
   }
@@ -125,16 +170,16 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
     final now = DateTime.now();
     final difference = now.difference(lastSeen);
 
-    if (difference.isNegative) {
-      return 'Online'; // lastSeen is in the future, treat as online
-    } else if (difference.inSeconds < 60) {
-      return 'Last seen ${difference.inSeconds}s ago';
+    if (difference.inSeconds < 30) {
+      return 'Just now';
     } else if (difference.inMinutes < 60) {
       return 'Last seen ${difference.inMinutes}m ago';
     } else if (difference.inHours < 24) {
       return 'Last seen ${difference.inHours}h ago';
+    } else if (difference.inDays < 7) {
+      return 'Last seen ${difference.inDays}d ago';
     } else {
-      return 'Last seen ${DateFormat('MMM d, h:mm a').format(lastSeen.toLocal())}';
+      return 'Last seen ${DateFormat('MMM d').format(lastSeen)}';
     }
   }
 
@@ -151,6 +196,44 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                     ? const Center(child: Text('Failed to load profile.', style: TextStyle(color: Colors.white)))
                     : Column(
                         children: [
+                          // No Internet Connection Banner
+                          if (!_isConnected)
+                            Container(
+                              width: double.infinity,
+                              color: Colors.redAccent.withOpacity(0.9),
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.wifi_off, color: Colors.white, size: 14),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'No internet connection',
+                                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                          // Connection Restored Banner
+                          if (_showRestoredMessage)
+                            Container(
+                              width: double.infinity,
+                              color: Colors.green.withOpacity(0.9),
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.check_circle, color: Colors.white, size: 14),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Connection restored',
+                                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
+                            ),
+
                           // Custom Header matching HomeScreen and SettingsScreen
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -237,13 +320,27 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                             ),
                                           ),
                                         ),
+                                      if (_isCurrentUser && _isConnected)
+                                        Positioned(
+                                          bottom: 5,
+                                          left: 5,
+                                          child: Container(
+                                            width: 20,
+                                            height: 20,
+                                            decoration: BoxDecoration(
+                                              color: Colors.greenAccent,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: Colors.black, width: 3),
+                                            ),
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(height: 24),
 
                                 // User Info Section
-                                if (!_isCurrentUser)
+                                if (!_isCurrentUser && _isConnected)
                                   Center(
                                     child: Column(
                                       children: [
@@ -254,9 +351,9 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                               width: 12,
                                               height: 12,
                                               decoration: BoxDecoration(
-                                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                                color: _userProfile!.isActuallyOnline ? Colors.greenAccent : Colors.grey,
                                                 shape: BoxShape.circle,
-                                                boxShadow: _userProfile!.isOnline ? [
+                                                boxShadow: _userProfile!.isActuallyOnline ? [
                                                   BoxShadow(
                                                     color: Colors.greenAccent.withOpacity(0.5),
                                                     blurRadius: 8,
@@ -267,9 +364,9 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                             ),
                                             const SizedBox(width: 10),
                                             Text(
-                                              _userProfile!.isOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
+                                              _userProfile!.isActuallyOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
                                               style: TextStyle(
-                                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                                color: _userProfile!.isActuallyOnline ? Colors.greenAccent : Colors.grey,
                                                 fontWeight: FontWeight.bold,
                                                 fontSize: 14,
                                               ),

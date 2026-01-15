@@ -51,8 +51,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   app_user.User? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
   StreamSubscription<String>? _bubbleNavigationSubscription;
+  RealtimeChannel? _statusChannel;
   String? _initialChatId;
   Timer? _statusUpdateTimer;
+  Timer? _connectionDebounceTimer;
+  bool _isConnected = true;
+  bool _showRestoredMessage = false;
+  Timer? _restoredMessageTimer;
 
   @override
   void initState() {
@@ -65,6 +70,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     _loadCurrentUserProfile();
     _checkNotificationLaunch();
     
+    // Listen to Supabase connection status using a channel
+    _statusChannel = _supabase.channel('home_conn_tracker').subscribe((status, error) {
+      if (mounted) {
+        final newConnected = status == RealtimeSubscribeStatus.subscribed;
+        
+        if (newConnected) {
+          _connectionDebounceTimer?.cancel();
+          if (!_isConnected) {
+            // Connection restored
+            setState(() {
+              _isConnected = true;
+              _showRestoredMessage = true;
+            });
+            _restoredMessageTimer?.cancel();
+            _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
+              if (mounted) {
+                setState(() => _showRestoredMessage = false);
+              }
+            });
+          }
+        } else {
+          // Debounce connection loss to avoid flickering on minor blips
+          _connectionDebounceTimer?.cancel();
+          _connectionDebounceTimer = Timer(const Duration(seconds: 10), () {
+            if (mounted) {
+              setState(() {
+                _isConnected = false;
+                _showRestoredMessage = false;
+              });
+            }
+          });
+        }
+      }
+    });
+
     // Listen for notification taps while the app is in foreground
     _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
       NotificationService.setPendingNavigationChatId(chatId);
@@ -91,7 +131,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   void dispose() {
     _navigationSubscription?.cancel();
     _bubbleNavigationSubscription?.cancel();
+    if (_statusChannel != null) {
+      _supabase.removeChannel(_statusChannel!);
+    }
     _statusUpdateTimer?.cancel();
+    _restoredMessageTimer?.cancel();
+    _connectionDebounceTimer?.cancel();
     _searchController.dispose();
     _searchFocusNode.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -347,6 +392,44 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       body: SafeArea(
         child: Column(
           children: [
+            // No Internet Connection Banner
+            if (!_isConnected)
+              Container(
+                width: double.infinity,
+                color: Colors.redAccent.withOpacity(0.9),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.wifi_off, color: Colors.white, size: 16),
+                    SizedBox(width: 8),
+                    Text(
+                      'No internet connection',
+                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+
+            // Connection Restored Banner
+            if (_showRestoredMessage)
+              Container(
+                width: double.infinity,
+                color: Colors.green.withOpacity(0.9),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.white, size: 16),
+                    SizedBox(width: 8),
+                    Text(
+                      'Connection restored',
+                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+
             // Custom Messenger Header
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -446,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               child: Builder(
                 builder: (context) {
                   final activeChats = _chats.where((chat) {
-                    if (chat.isOnline) return true;
+                    if (chat.isActuallyOnline) return true;
                     if (chat.lastSeen == null) return false;
                     final difference = DateTime.now().difference(chat.lastSeen!);
                     return difference.inMinutes < 1;
@@ -531,19 +614,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         )
                       : null,
                 ),
-                Positioned(
-                  bottom: 0,
-                  right: 0,
-                  child: Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: Colors.greenAccent,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.black, width: 2.5),
+                if (_isConnected)
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: Colors.greenAccent,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.black, width: 2.5),
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
             const SizedBox(height: 4),
@@ -675,7 +759,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         : null,
                   ),
                 ),
-                if (chat.isOnline)
+                if (chat.isActuallyOnline && _isConnected)
                   Positioned(
                     bottom: 2,
                     right: 2,
@@ -689,7 +773,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                     ),
                   )
-                else if (chat.lastSeen != null)
+                else if (chat.lastSeen != null && _isConnected)
                   Positioned(
                     bottom: 0,
                     right: 0,
@@ -762,7 +846,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         )
                       : null,
                 ),
-                if (chat.isOnline)
+                if (chat.isActuallyOnline && _isConnected)
                   Positioned(
                     bottom: 0,
                     right: 0,
@@ -776,7 +860,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                     ),
                   )
-                else if (chat.lastSeen != null)
+                else if (chat.lastSeen != null && _isConnected)
                   Positioned(
                     bottom: -2,
                     right: -2,
@@ -816,14 +900,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         ),
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        chat.isOnline ? 'Online' : _formatLastSeenShort(chat.lastSeen),
-                        style: TextStyle(
-                          color: chat.isOnline ? Colors.greenAccent : Colors.grey.shade500,
-                          fontSize: 11,
-                          fontWeight: chat.isOnline ? FontWeight.bold : FontWeight.normal,
+                      if (_isConnected)
+                        Text(
+                          chat.isActuallyOnline ? 'Online' : _formatLastSeenShort(chat.lastSeen),
+                          style: TextStyle(
+                            color: chat.isActuallyOnline ? Colors.greenAccent : Colors.grey.shade500,
+                            fontSize: 11,
+                            fontWeight: chat.isActuallyOnline ? FontWeight.bold : FontWeight.normal,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -931,20 +1016,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     final lastSeenUtc = lastSeen.toUtc();
     final difference = now.difference(lastSeenUtc);
 
-    if (difference.isNegative || difference.inSeconds < 30) {
+    if (difference.inSeconds < 30) {
       return 'just now'; 
-    } else if (difference.inSeconds < 60) {
-      return 'last seen ${difference.inSeconds}s ago';
     } else if (difference.inMinutes < 60) {
-      return 'last seen ${difference.inMinutes}m ago';
+      return '${difference.inMinutes}m';
     } else if (difference.inHours < 24) {
-      return 'last seen ${difference.inHours}h ago';
-    } else if (difference.inDays == 1) {
-      return 'last seen yesterday';
+      return '${difference.inHours}h';
     } else if (difference.inDays < 7) {
-      return 'last seen ${DateFormat('EEE').format(lastSeenUtc.toLocal())}';
+      return '${difference.inDays}d';
     } else {
-      return 'last seen ${DateFormat('dd/MM/yyyy').format(lastSeenUtc.toLocal())}';
+      return DateFormat('MMM d').format(lastSeenUtc.toLocal());
     }
   }
 
@@ -1077,18 +1158,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     final lastSeenUtc = lastSeen.toUtc();
     final difference = now.difference(lastSeenUtc);
 
-    if (difference.isNegative || difference.inMinutes < 1) {
-      return 'Online';
+    if (difference.inSeconds < 30) {
+      return 'Just now';
     } else if (difference.inMinutes < 60) {
       return 'Active ${difference.inMinutes}m ago';
     } else if (difference.inHours < 24) {
       return 'Active ${difference.inHours}h ago';
-    } else if (difference.inDays == 1) {
-      return 'Active yesterday';
     } else if (difference.inDays < 7) {
-      return 'Active on ${DateFormat('EEE').format(lastSeenUtc.toLocal())}';
+      return 'Active ${difference.inDays}d ago';
     } else {
-      return 'Active on ${DateFormat('dd/MM/yyyy').format(lastSeenUtc.toLocal())}';
+      return 'Active on ${DateFormat('MMM d').format(lastSeenUtc.toLocal())}';
     }
   }
 
