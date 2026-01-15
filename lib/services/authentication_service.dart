@@ -18,8 +18,7 @@ class SupabaseAuthService implements BackendService {
       final Session? session = data.session;
       
       if (session?.user != null) {
-        // User is logged in
-        _userRepository.updateUserStatus(session!.user.id, isOnline: true);
+        // User is logged in - Presence is now handled globally in main.dart via PresenceService
       }
     });
   }

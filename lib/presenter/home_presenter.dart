@@ -21,7 +21,7 @@ class HomePresenter {
 
   List<Chat> get chats => _chats;
 
-  void loadChats() {
+  void loadChats({bool showLoading = true}) {
     final user = _supabase.auth.currentUser;
     if (user == null) {
       _view.displayChats([]);
@@ -29,14 +29,18 @@ class HomePresenter {
       return;
     }
 
-    _view.showLoading();
+    if (showLoading) {
+      _view.showLoading();
+    }
     
     _chatsSubscription?.cancel();
     _chatsSubscription = _chatRepository.getChatsForUser(user.id).listen(
       (chats) async {
         _chats = chats;
         _view.displayChats(_chats);
-        _view.hideLoading();
+        if (showLoading) {
+          _view.hideLoading();
+        }
         
         // Subscribe to status updates for each chat's other user
         for (var chat in _chats) {
@@ -53,7 +57,9 @@ class HomePresenter {
       onError: (error) {
         print('HomePresenter: Error loading chats: $error');
         _view.displayChats([]);
-        _view.hideLoading();
+        if (showLoading) {
+          _view.hideLoading();
+        }
       },
     );
   }
@@ -62,19 +68,16 @@ class HomePresenter {
     final user = _supabase.auth.currentUser;
     if (user == null) return;
 
-    _view.showLoading();
     try {
       // 1. Force a manual fetch of chats
       final chatsData = await _chatRepository.fetchChatsForUser(user.id);
       _chats = chatsData;
       _view.displayChats(_chats);
 
-      // 2. Restart subscriptions
-      loadChats();
+      // 2. Restart subscriptions without showing full loading state
+      loadChats(showLoading: false);
     } catch (e) {
       print('HomePresenter: Error refreshing chats: $e');
-    } finally {
-      _view.hideLoading();
     }
   }
 

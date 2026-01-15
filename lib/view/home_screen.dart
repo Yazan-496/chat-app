@@ -16,6 +16,7 @@ import 'package:my_chat_app/view/profile_screen.dart';
 import 'package:my_chat_app/view/settings_screen.dart';
 import 'package:my_chat_app/view/user_discovery_screen.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
+import 'package:my_chat_app/view/splash_screen.dart';
 import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
 import 'package:my_chat_app/view/relationship_selection_dialog.dart';
@@ -322,25 +323,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     }
   }
 
+  Future<void> _refreshConnectionStatus() async {
+    // 1. Check current realtime connection status
+    final isActuallyConnected = _supabase.realtime.isConnected;
+    
+    if (mounted) {
+      setState(() {
+        _isConnected = isActuallyConnected;
+        if (isActuallyConnected && !_isConnected) {
+          _showRestoredMessage = true;
+          _restoredMessageTimer?.cancel();
+          _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
+            if (mounted) setState(() => _showRestoredMessage = false);
+          });
+        }
+      });
+    }
+
+    // 2. Force reconnect if disconnected
+    if (!isActuallyConnected) {
+      _supabase.realtime.connect();
+    }
+
+    // 3. Refresh Presence
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId != null) {
+      PresenceService().setUserOnline(userId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if ((_isLoading && !_isSearching) || _isNavigationPending()) {
-      return const Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Colors.blueAccent),
-              SizedBox(height: 20),
-              Text(
-                'Opening chat...',
-                style: TextStyle(color: Colors.white, fontSize: 16),
-              ),
-            ],
-          ),
-        ),
-      );
+    if ((_isLoading && !_isSearching && _chats.isEmpty) || _isNavigationPending()) {
+      // Use 'LoZo' for initial load, 'Opening chat...' for transitions
+      final message = _isNavigationPending() ? 'Opening chat...' : 'LoZo';
+      return SplashScreen(message: message);
     }
 
     return Scaffold(
@@ -552,15 +569,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               ),
             ),
 
+            // Background Loading Indicator (non-intrusive)
+            if (_isLoading && _chats.isNotEmpty && !_isSearching)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16.0),
+                child: LinearProgressIndicator(
+                  backgroundColor: Colors.transparent,
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                  minHeight: 1,
+                ),
+              ),
+
             // Chat List
             Expanded(
               child: RefreshIndicator(
                 onRefresh: () async {
-                  await _presenter?.refreshChats();
+                  await Future.wait([
+                    _presenter?.refreshChats() ?? Future.value(),
+                    _refreshConnectionStatus(),
+                  ]);
                 },
                 child: _isSearching 
                     ? _buildSearchResults()
-                    : _isLoading
+                    : (_isLoading && _chats.isEmpty)
                         ? const Center(child: CircularProgressIndicator())
                         : _chats.isEmpty
                             ? const Center(child: Text('No chats yet.', style: TextStyle(color: Colors.grey)))
@@ -900,15 +931,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         ),
                       ),
                       const SizedBox(width: 6),
-                      if (_isConnected)
-                        Text(
-                          chat.isActuallyOnline ? 'Online' : _formatLastSeenShort(chat.lastSeen),
-                          style: TextStyle(
-                            color: chat.isActuallyOnline ? Colors.greenAccent : Colors.grey.shade500,
-                            fontSize: 11,
-                            fontWeight: chat.isActuallyOnline ? FontWeight.bold : FontWeight.normal,
-                          ),
-                        ),
+                      // if (_isConnected)
+                      //   Text(
+                      //     chat.isActuallyOnline ? 'Online' : _formatLastSeenShort(chat.lastSeen),
+                      //     style: TextStyle(
+                      //       color: chat.isActuallyOnline ? Colors.greenAccent : Colors.grey.shade500,
+                      //       fontSize: 11,
+                      //       fontWeight: chat.isActuallyOnline ? FontWeight.bold : FontWeight.normal,
+                      //     ),
+                      //   ),
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -1161,7 +1192,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     if (difference.inSeconds < 30) {
       return 'Just now';
     } else if (difference.inMinutes < 60) {
-      return 'Active ${difference.inMinutes}m ago';
+      final minutes = difference.inMinutes < 1 ? 1 : difference.inMinutes;
+      return 'Active ${minutes}m ago';
     } else if (difference.inHours < 24) {
       return 'Active ${difference.inHours}h ago';
     } else if (difference.inDays < 7) {

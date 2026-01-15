@@ -21,11 +21,7 @@ class User {
   });
 
   bool get isActuallyOnline {
-    if (!isOnline) return false;
-    if (lastSeen == null) return false;
-    final now = DateTime.now();
-    // If last seen is within 5 minutes, consider online to allow for minor connection gaps
-    return now.difference(lastSeen!).inMinutes < 5;
+    return isOnline;
   }
 
   // Factory constructor for creating a User from a map (e.g., from Firestore)

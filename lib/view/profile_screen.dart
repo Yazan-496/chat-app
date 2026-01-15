@@ -173,7 +173,8 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
     if (difference.inSeconds < 30) {
       return 'Just now';
     } else if (difference.inMinutes < 60) {
-      return 'Last seen ${difference.inMinutes}m ago';
+      final minutes = difference.inMinutes < 1 ? 1 : difference.inMinutes;
+      return 'Last seen ${minutes}m ago';
     } else if (difference.inHours < 24) {
       return 'Last seen ${difference.inHours}h ago';
     } else if (difference.inDays < 7) {

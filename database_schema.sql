@@ -2,8 +2,9 @@
 -- Complete Database Schema for My Chat App (fixed)
 -- ============================================
 
--- Enable UUID extension
+-- Enable UUID and Cron extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS pg_cron;
 
 -- ============================================
 -- 1. PROFILES TABLE (User profiles)
@@ -98,6 +99,59 @@ ALTER TABLE public.chats
   ADD COLUMN IF NOT EXISTS participant_ids TEXT[];
 
 CREATE INDEX IF NOT EXISTS idx_chats_participant_ids ON public.chats USING GIN(participant_ids);
+
+-- ============================================
+-- 5. FUNCTION: HANDLE USER ONLINE/OFFLINE STATUS
+-- ============================================
+-- This function updates the user's online status and last seen timestamp.
+CREATE OR REPLACE FUNCTION handle_user_status(user_id UUID, online_status BOOLEAN)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE public.profiles
+  SET
+    is_online = online_status,
+    last_seen = CASE WHEN online_status = false THEN now() ELSE last_seen END
+  WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- ============================================
+-- 6. FUNCTION: DELETE OLD MESSAGES (KEEP LAST 100)
+-- ============================================
+-- This function keeps only the last 100 messages for each chat and deletes older ones.
+CREATE OR REPLACE FUNCTION delete_old_messages()
+RETURNS void AS $$
+BEGIN
+  DELETE FROM public.messages
+  WHERE id IN (
+    SELECT id
+    FROM (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY chat_id
+               ORDER BY timestamp DESC
+             ) as msg_rank
+      FROM public.messages
+    ) ranked_messages
+    WHERE msg_rank > 100
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================
+-- 7. CRON JOB: SCHEDULE CLEANUP EVERY HOUR AT MINUTE 26
+-- ============================================
+-- Unschedule any previous job with the same name to avoid duplicates.
+SELECT cron.unschedule('cleanup-old-messages');
+
+-- Schedule the task to run at minute 26 of every hour.
+SELECT cron.schedule(
+  'cleanup-old-messages',
+  '26 * * * *',
+  'SELECT delete_old_messages()'
+);
 
 -- ============================================
 -- RLS POLICIES FOR PROFILES

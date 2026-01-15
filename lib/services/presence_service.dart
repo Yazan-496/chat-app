@@ -2,49 +2,104 @@ import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PresenceService {
+  static final PresenceService _instance = PresenceService._internal();
+  factory PresenceService() => _instance;
+  PresenceService._internal();
+
   final SupabaseClient _supabase = Supabase.instance.client;
+  RealtimeChannel? _statusChannel;
+  String? _currentUserId;
   Timer? _heartbeatTimer;
 
-  /// Marks the user as online and updates lastSeen to now.
-  /// Also starts a periodic heartbeat to keep the user 'online'.
-  Future<void> setUserOnline(String uid) async {
-    try {
-      await _supabase.from('profiles').update({
-        'is_online': true,
-        'last_seen': DateTime.now().toUtc().toIso8601String(),
-      }).eq('id', uid);
-      
-      _startHeartbeat(uid);
-    } catch (e) {
-      print('PresenceService: Failed to set online for $uid: $e');
+  /// Sets up user status (Online/Offline) using Supabase Presence and a Heartbeat
+  void setUserStatus(String userId) {
+    if (_currentUserId == userId && _statusChannel != null) return;
+    
+    // Clear previous state if user ID changed
+    if (_currentUserId != userId) {
+      dispose();
     }
-  }
+    
+    _currentUserId = userId;
+    
+    // Initial online update - call immediately before subscription to be fast
+    _sendOnlineStatus();
+    _startHeartbeat();
+    
+    // 1. Setup the Realtime Channel for Presence (optional but good for tracking)
+    _statusChannel = _supabase.channel('online-users');
 
-  void _startHeartbeat(String uid) {
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 30), (timer) async {
-      try {
-        await _supabase.from('profiles').update({
-          'last_seen': DateTime.now().toUtc().toIso8601String(),
-          'is_online': true,
-        }).eq('id', uid);
-      } catch (e) {
-        print('PresenceService: Heartbeat failed for $uid: $e');
+    _statusChannel!.onPresenceSync((payload) {
+      // Sync local state if needed
+    }).onPresenceJoin((payload) {
+      // Each user handles their own status via the heartbeat.
+    }).onPresenceLeave((payload) {
+      // Scenario 2: Abrupt Disconnect
+      // Note: This callback runs on OTHER clients when a user disconnects abruptly.
+      // The server-side Supabase Presence handles the 'leave' event automatically
+      // when the WebSocket connection is lost (internet cut or app killed).
+    }).subscribe((status, [error]) async {
+      if (status == RealtimeSubscribeStatus.subscribed) {
+        // Track the current user in presence
+        await _statusChannel!.track({
+          'user_id': userId,
+          'online_at': DateTime.now().toUtc().toIso8601String(),
+        });
       }
     });
   }
 
-  /// Marks the user as offline and updates lastSeen to now.
-  Future<void> setUserOffline(String uid) async {
+  void _startHeartbeat() {
     _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _sendOnlineStatus();
+    });
+  }
+
+  Future<void> _sendOnlineStatus() async {
+    if (_currentUserId == null) return;
     try {
-      await _supabase.from('profiles').update({
-        'is_online': false,
-        'last_seen': DateTime.now().toUtc().toIso8601String(),
-        'active_chat_id': null,
-      }).eq('id', uid);
+      print('PresenceService: Sending heartbeat for user $_currentUserId (isOnline: true)');
+      await _supabase.rpc('handle_user_status', params: {
+        'user_id': _currentUserId,
+        'online_status': true,
+      });
     } catch (e) {
-      print('PresenceService: Failed to set offline for $uid: $e');
+      print('PresenceService: Error sending heartbeat: $e');
     }
+  }
+
+  /// Helper for compatibility with old code
+  Future<void> setUserOnline(String uid) async {
+    print('PresenceService: Manually setting user online: $uid');
+    setUserStatus(uid);
+  }
+
+  /// Helper for compatibility with old code
+  Future<void> setUserOffline(String uid) async {
+    print('PresenceService: Manually setting user offline: $uid');
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    
+    try {
+      await _supabase.rpc('handle_user_status', params: {
+        'user_id': uid,
+        'online_status': false,
+      });
+    } catch (e) {
+      print('PresenceService: Error setting offline status: $e');
+    }
+    
+    dispose();
+  }
+
+  void dispose() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    if (_statusChannel != null) {
+      _statusChannel!.unsubscribe();
+      _statusChannel = null;
+    }
+    _currentUserId = null;
   }
 }

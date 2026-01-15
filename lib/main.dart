@@ -7,6 +7,7 @@ import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/utils/app_theme.dart';
 import 'package:my_chat_app/view/app_view.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
+import 'package:my_chat_app/view/splash_screen.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
@@ -41,6 +42,7 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
   final SupabaseClient _supabase = SupabaseManager.client;
   String? _pendingChatId;
   StreamSubscription<AuthState>? _authStateSubscription;
+  bool _showSplash = true;
 
   @override
   void initState() {
@@ -48,6 +50,22 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     WidgetsBinding.instance.addObserver(this);
     _presenter = AppPresenter(this);
     _presenter.onInit();
+
+    // Proactively set user online if already logged in
+    final currentUser = _supabase.auth.currentUser;
+    if (currentUser != null) {
+      _presenceService.setUserOnline(currentUser.id);
+      NotificationService.startGlobalMessageListener(currentUser.id);
+    }
+
+    // Ensure splash screen shows for at least 2 seconds
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) {
+        setState(() {
+          _showSplash = false;
+        });
+      }
+    });
 
     // Listen to auth state changes to start/stop global listener
     _authStateSubscription = _supabase.auth.onAuthStateChange.listen((data) async {
@@ -77,9 +95,9 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     if (state == AppLifecycleState.resumed) {
       _presenceService.setUserOnline(user.id);
       NotificationService.startGlobalMessageListener(user.id);
-    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
+      // Scenario 1: Graceful Exit - Set offline when app is minimized, backgrounded, or killed
       _presenceService.setUserOffline(user.id);
-      // We don't stop the global listener here to allow it to run in background as long as possible
     }
   }
 
@@ -87,7 +105,7 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: navigatorKey,
-      title: 'My Chat App',
+      title: 'LoZo',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: _getThemeMode(_themeMode),
@@ -102,10 +120,8 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
       home: StreamBuilder<AuthState>(
         stream: _supabase.auth.onAuthStateChange,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            );
+          if (_showSplash || snapshot.connectionState == ConnectionState.waiting) {
+            return SplashScreen(message: 'LoZo');
           }
           if (snapshot.hasData && snapshot.data?.session != null) {
             return HomeScreen(initialChatId: _pendingChatId);
