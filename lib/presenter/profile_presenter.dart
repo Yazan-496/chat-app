@@ -118,9 +118,8 @@ class ProfilePresenter {
       // Supabase doesn't allow self-deletion via client library for auth users by default.
       
       await _supabase.auth.signOut();
-
       _view.showMessage('Account deletion requested.');
-      _view.navigateBack(); // Navigate back to AuthScreen after deletion
+      _view.navigateToSignIn(); 
     } catch (e) {
       _view.showMessage('Failed to delete account: $e');
     } finally {

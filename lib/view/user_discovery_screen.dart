@@ -4,6 +4,7 @@ import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
 import 'package:my_chat_app/model/relationship.dart'; // New import
 import 'package:my_chat_app/view/relationship_selection_dialog.dart'; // New import
+import 'package:my_chat_app/utils/toast_utils.dart';
 
 class UserDiscoveryScreen extends StatefulWidget {
   const UserDiscoveryScreen({super.key});
@@ -46,11 +47,7 @@ class _UserDiscoveryScreenState extends State<UserDiscoveryScreen> implements Us
 
   @override
   void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ToastUtils.showCustomToast(context, message);
   }
 
   @override

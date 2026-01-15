@@ -15,6 +15,7 @@ import 'package:my_chat_app/notification_service.dart';
 import 'package:flutter/services.dart';
 import 'package:my_chat_app/services/sound_service.dart';
 import 'package:my_chat_app/supabase_client.dart'; // Import SupabaseManager
+import 'package:my_chat_app/utils/toast_utils.dart';
 
 class ChatScreen extends StatefulWidget {
   final Chat chat;
@@ -102,11 +103,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
 
   @override
   void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ToastUtils.showCustomToast(context, message);
   }
 
   @override

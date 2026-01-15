@@ -11,7 +11,9 @@ import 'package:flutter/services.dart';
 import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
+import 'package:my_chat_app/main.dart';
 import 'package:my_chat_app/services/presence_service.dart';
+import 'package:my_chat_app/utils/toast_utils.dart';
 
 class SettingsScreen extends StatefulWidget {
   final Function(ThemeModeType) onThemeChanged;
@@ -30,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
   ThemeModeType _selectedThemeMode = ThemeModeType.system;
   String _selectedLanguageCode = 'en';
   Color _currentAvatarColor = Colors.blue.shade300;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -83,16 +86,26 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
 
   @override
   void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ToastUtils.showCustomToast(context, message);
   }
 
   @override
   void updateView() {
     setState(() {});
+  }
+
+  @override
+  void showLoading() {
+    setState(() {
+      _isLoading = true;
+    });
+  }
+
+  @override
+  void hideLoading() {
+    setState(() {
+      _isLoading = false;
+    });
   }
 
   Future<void> _pickNotificationSound() async {
@@ -113,166 +126,177 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Custom Header matching HomeScreen
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-              child: Row(
-                children: [
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade900,
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                      onPressed: () => Navigator.of(context).pop(),
-                    ),
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Column(
+              children: [
+                // Custom Header matching HomeScreen
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  child: Row(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade900,
+                          shape: BoxShape.circle,
+                        ),
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      const Text(
+                        'Settings',
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 16),
-                  const Text(
-                    'Settings',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+                ),
 
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                children: [
-                  const SizedBox(height: 16),
-                  // Profile Section
-                  Center(
-                    child: Column(
-                      children: [
-                        Stack(
+                Expanded(
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    children: [
+                      const SizedBox(height: 16),
+                      // Profile Section
+                      Center(
+                        child: Column(
                           children: [
-                            CircleAvatar(
-                              radius: 50,
-                              backgroundColor: _currentAvatarColor,
-                              child: Text(
-                                _supabase.auth.currentUser?.email?[0].toUpperCase() ?? 'U',
-                                style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.blueAccent,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: Colors.black, width: 2),
+                            Stack(
+                              children: [
+                                CircleAvatar(
+                                  radius: 50,
+                                  backgroundColor: _currentAvatarColor,
+                                  child: Text(
+                                    _supabase.auth.currentUser?.email?[0].toUpperCase() ?? 'U',
+                                    style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+                                  ),
                                 ),
-                                child: IconButton(
-                                  constraints: const BoxConstraints(),
-                                  padding: const EdgeInsets.all(8),
-                                  icon: const Icon(Icons.colorize, color: Colors.white, size: 20),
-                                  onPressed: _showColorPicker,
+                                Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.blueAccent,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.black, width: 2),
+                                    ),
+                                    child: IconButton(
+                                      constraints: const BoxConstraints(),
+                                      padding: const EdgeInsets.all(8),
+                                      icon: const Icon(Icons.colorize, color: Colors.white, size: 20),
+                                      onPressed: _showColorPicker,
+                                    ),
+                                  ),
                                 ),
-                              ),
+                              ],
                             ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _supabase.auth.currentUser?.email ?? 'User',
+                              style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 24),
                           ],
                         ),
-                        const SizedBox(height: 12),
-                        Text(
-                          _supabase.auth.currentUser?.email ?? 'User',
-                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 24),
-                      ],
-                    ),
-                  ),
+                      ),
 
-                  _buildSettingItem(
-                    title: 'Theme Mode',
-                    subtitle: _selectedThemeMode.toString().split('.').last.toUpperCase(),
-                    icon: Icons.brightness_6,
-                    trailing: DropdownButton<ThemeModeType>(
-                      value: _selectedThemeMode,
-                      dropdownColor: Colors.grey.shade900,
-                      underline: const SizedBox(),
-                      onChanged: (ThemeModeType? newValue) {
-                        if (newValue != null) {
-                          _presenter.updateThemeMode(newValue);
-                          widget.onThemeChanged(newValue);
-                        }
-                      },
-                      items: ThemeModeType.values.map<DropdownMenuItem<ThemeModeType>>((ThemeModeType value) {
-                        return DropdownMenuItem<ThemeModeType>(
-                          value: value,
-                          child: Text(value.toString().split('.').last.toUpperCase(), style: const TextStyle(color: Colors.white)),
-                        );
-                      }).toList(),
-                    ),
+                      _buildSettingItem(
+                        title: 'Theme Mode',
+                        subtitle: _selectedThemeMode.toString().split('.').last.toUpperCase(),
+                        icon: Icons.brightness_6,
+                        trailing: DropdownButton<ThemeModeType>(
+                          value: _selectedThemeMode,
+                          dropdownColor: Colors.grey.shade900,
+                          underline: const SizedBox(),
+                          onChanged: (ThemeModeType? newValue) {
+                            if (newValue != null) {
+                              _presenter.updateThemeMode(newValue);
+                              widget.onThemeChanged(newValue);
+                            }
+                          },
+                          items: ThemeModeType.values.map<DropdownMenuItem<ThemeModeType>>((ThemeModeType value) {
+                            return DropdownMenuItem<ThemeModeType>(
+                              value: value,
+                              child: Text(value.toString().split('.').last.toUpperCase(), style: const TextStyle(color: Colors.white)),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _buildSettingItem(
+                        title: 'Language',
+                        subtitle: _selectedLanguageCode == 'en' ? 'English' : 'العربية',
+                        icon: Icons.language,
+                        trailing: DropdownButton<String>(
+                          value: _selectedLanguageCode,
+                          dropdownColor: Colors.grey.shade900,
+                          underline: const SizedBox(),
+                          onChanged: (String? newValue) {
+                            if (newValue != null) {
+                              setState(() {
+                                _selectedLanguageCode = newValue;
+                              });
+                              _localStorageService.saveLanguageCode(newValue);
+                              final mainApp = context.findAncestorStateOfType<MainAppState>();
+                              if (mainApp != null) {
+                                mainApp.setLocale(Locale(newValue));
+                              }
+                            }
+                          },
+                          items: const [
+                            DropdownMenuItem(value: 'en', child: Text('English', style: TextStyle(color: Colors.white))),
+                            DropdownMenuItem(value: 'ar', child: Text('العربية', style: TextStyle(color: Colors.white))),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _buildSettingItem(
+                        title: 'Notification Sound',
+                        subtitle: _presenter.notificationSoundPath != null
+                            ? _presenter.notificationSoundPath!.split('/').last
+                            : 'Default',
+                        icon: Icons.notifications_active,
+                        onTap: _pickNotificationSound,
+                        trailing: _presenter.notificationSoundPath != null
+                            ? IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.grey),
+                                onPressed: () => _presenter.updateNotificationSound(null),
+                              )
+                            : const Icon(Icons.chevron_right, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 24),
+                      const Divider(color: Colors.grey, thickness: 0.5),
+                      const SizedBox(height: 12),
+                      _buildSettingItem(
+                        title: 'Logout',
+                        subtitle: 'Sign out of your account',
+                        icon: Icons.logout,
+                        iconColor: Colors.redAccent,
+                        onTap: _showLogoutConfirmation,
+                        trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 32),
+                    ],
                   ),
-                  const SizedBox(height: 12),
-                  _buildSettingItem(
-                    title: 'Language',
-                    subtitle: _selectedLanguageCode == 'en' ? 'English' : 'العربية',
-                    icon: Icons.language,
-                    trailing: DropdownButton<String>(
-                      value: _selectedLanguageCode,
-                      dropdownColor: Colors.grey.shade900,
-                      underline: const SizedBox(),
-                      onChanged: (String? newValue) {
-                        if (newValue != null) {
-                          setState(() {
-                            _selectedLanguageCode = newValue;
-                          });
-                          _localStorageService.saveLanguageCode(newValue);
-                          final mainApp = context.findAncestorStateOfType<MainAppState>();
-                          if (mainApp != null) {
-                            mainApp.setLocale(Locale(newValue));
-                          }
-                        }
-                      },
-                      items: const [
-                        DropdownMenuItem(value: 'en', child: Text('English', style: TextStyle(color: Colors.white))),
-                        DropdownMenuItem(value: 'ar', child: Text('العربية', style: TextStyle(color: Colors.white))),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _buildSettingItem(
-                    title: 'Notification Sound',
-                    subtitle: _presenter.notificationSoundPath != null
-                        ? _presenter.notificationSoundPath!.split('/').last
-                        : 'Default',
-                    icon: Icons.notifications_active,
-                    onTap: _pickNotificationSound,
-                    trailing: _presenter.notificationSoundPath != null
-                        ? IconButton(
-                            icon: const Icon(Icons.clear, color: Colors.grey),
-                            onPressed: () => _presenter.updateNotificationSound(null),
-                          )
-                        : const Icon(Icons.chevron_right, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 24),
-                  const Divider(color: Colors.grey, thickness: 0.5),
-                  const SizedBox(height: 12),
-                  _buildSettingItem(
-                    title: 'Logout',
-                    subtitle: 'Sign out of your account',
-                    icon: Icons.logout,
-                    iconColor: Colors.redAccent,
-                    onTap: _showLogoutConfirmation,
-                    trailing: const Icon(Icons.chevron_right, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 32),
-                ],
+                ),
+              ],
+            ),
+          ),
+          if (_isLoading)
+            Container(
+              color: Colors.black.withOpacity(0.5),
+              child: const Center(
+                child: CircularProgressIndicator(color: Colors.blueAccent),
               ),
             ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -318,30 +342,48 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
+        backgroundColor: Colors.grey.shade900,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Logout',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: const Text(
+          'Are you sure you want to logout?',
+          style: TextStyle(color: Colors.white70),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey.shade400)),
           ),
           TextButton(
             onPressed: () async {
               Navigator.pop(context); // Close dialog
-              final userId = _supabase.auth.currentUser?.id;
-              if (userId != null) {
-                final presenceService = PresenceService();
-                await presenceService.setUserOffline(userId);
-              }
-              await _supabase.auth.signOut();
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (_) => const AuthScreen()),
+              showLoading();
+              try {
+                final userId = _supabase.auth.currentUser?.id;
+                if (userId != null) {
+                  final presenceService = PresenceService();
+                  await presenceService.setUserOffline(userId);
+                }
+                await _supabase.auth.signOut();
+                // We use the global navigator key to ensure we clear the stack and show AuthScreen
+                navigatorKey.currentState?.pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => AuthScreen()),
                   (route) => false,
                 );
+              } catch (e) {
+                if (mounted) {
+                  showMessage('Logout failed: $e');
+                }
+              } finally {
+                if (mounted) {
+                  hideLoading();
+                }
               }
             },
-            child: const Text('Logout', style: TextStyle(color: Colors.redAccent)),
+            child: const Text('Logout', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
           ),
         ],
       ),

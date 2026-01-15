@@ -8,5 +8,6 @@ abstract class ProfileView {
   void displayUserProfile(User user);
   void displayRelationship(Relationship? relationship); // New method
   void navigateBack();
+  void navigateToSignIn();
   void updateView();
 }

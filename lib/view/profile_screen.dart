@@ -7,6 +7,9 @@ import 'package:my_chat_app/presenter/profile_presenter.dart';
 import 'package:my_chat_app/view/profile_view.dart';
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:my_chat_app/utils/toast_utils.dart';
+import 'package:my_chat_app/view/auth_screen.dart';
+import 'package:my_chat_app/main.dart';
 
 class ProfileScreen extends StatefulWidget {
   final String userId;
@@ -70,11 +73,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
 
   @override
   void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ToastUtils.showCustomToast(context, message);
   }
 
   @override
@@ -95,6 +94,16 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   @override
   void navigateBack() {
     Navigator.of(context).pop();
+  }
+
+  @override
+  void navigateToSignIn() {
+    // We use the global navigator key to ensure we can navigate even if this widget is being unmounted
+    // during a sign-out event triggered by a StreamBuilder in main.dart.
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => AuthScreen()),
+      (route) => false,
+    );
   }
 
   @override
@@ -133,205 +142,217 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _userProfile == null
-                ? const Center(child: Text('Failed to load profile.', style: TextStyle(color: Colors.white)))
-                : Column(
-                    children: [
-                      // Custom Header matching HomeScreen and SettingsScreen
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                        child: Row(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.grey.shade900,
-                                shape: BoxShape.circle,
-                              ),
-                              child: IconButton(
-                                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                                onPressed: () => Navigator.of(context).pop(),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Text(
-                              _isCurrentUser ? 'Your Profile' : 'Profile',
-                              style: const TextStyle(
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      Expanded(
-                        child: ListView(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                          children: [
-                            const SizedBox(height: 24),
-                            // Profile Avatar Section
-                            Center(
-                              child: Stack(
-                                children: [
-                                  GestureDetector(
-                                    onTap: _isCurrentUser ? _pickImage : null,
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        border: Border.all(color: Colors.grey.shade900, width: 4),
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: Colors.black.withOpacity(0.5),
-                                            blurRadius: 10,
-                                            offset: const Offset(0, 5),
-                                          ),
-                                        ],
-                                      ),
-                                      child: CircleAvatar(
-                                        radius: 65,
-                                        backgroundColor: _userProfile?.avatarColor != null 
-                                            ? Color(_userProfile!.avatarColor!) 
-                                            : Colors.blue.shade300,
-                                        backgroundImage: _userProfile?.profilePictureUrl != null
-                                            ? NetworkImage(_userProfile!.profilePictureUrl!)
-                                            : null,
-                                        child: _userProfile?.profilePictureUrl == null
-                                            ? Text(
-                                                _userProfile!.displayName.isNotEmpty ? _userProfile!.displayName[0].toUpperCase() : '?',
-                                                style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.bold),
-                                              )
-                                            : null,
-                                      ),
-                                    ),
+      body: Stack(
+        children: [
+          SafeArea(
+            child: _userProfile == null && _isLoading
+                ? const Center(child: CircularProgressIndicator(color: Colors.blueAccent))
+                : _userProfile == null
+                    ? const Center(child: Text('Failed to load profile.', style: TextStyle(color: Colors.white)))
+                    : Column(
+                        children: [
+                          // Custom Header matching HomeScreen and SettingsScreen
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                            child: Row(
+                              children: [
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade900,
+                                    shape: BoxShape.circle,
                                   ),
-                                  if (_isCurrentUser)
-                                    Positioned(
-                                      bottom: 0,
-                                      right: 0,
-                                      child: Container(
-                                        decoration: BoxDecoration(
-                                          color: Colors.blueAccent,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(color: Colors.black, width: 3),
-                                        ),
-                                        child: IconButton(
-                                          constraints: const BoxConstraints(),
-                                          padding: const EdgeInsets.all(10),
-                                          icon: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
-                                          onPressed: _pickImage,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                                    onPressed: () => Navigator.of(context).pop(),
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Text(
+                                  _isCurrentUser ? 'Your Profile' : 'Profile',
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          Expanded(
+                            child: ListView(
+                              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                              children: [
+                                const SizedBox(height: 24),
+                                // Profile Avatar Section
+                                Center(
+                                  child: Stack(
+                                    children: [
+                                      GestureDetector(
+                                        onTap: _isCurrentUser ? _pickImage : null,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            border: Border.all(color: Colors.grey.shade900, width: 4),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Colors.black.withOpacity(0.5),
+                                                blurRadius: 10,
+                                                offset: const Offset(0, 5),
+                                              ),
+                                            ],
+                                          ),
+                                          child: CircleAvatar(
+                                            radius: 65,
+                                            backgroundColor: _userProfile?.avatarColor != null 
+                                                ? Color(_userProfile!.avatarColor!) 
+                                                : Colors.blue.shade300,
+                                            backgroundImage: _userProfile?.profilePictureUrl != null
+                                                ? NetworkImage(_userProfile!.profilePictureUrl!)
+                                                : null,
+                                            child: _userProfile?.profilePictureUrl == null
+                                                ? Text(
+                                                    _userProfile!.displayName.isNotEmpty ? _userProfile!.displayName[0].toUpperCase() : '?',
+                                                    style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.bold),
+                                                  )
+                                                : null,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 24),
+                                      if (_isCurrentUser)
+                                        Positioned(
+                                          bottom: 0,
+                                          right: 0,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: Colors.blueAccent,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(color: Colors.black, width: 3),
+                                            ),
+                                            child: IconButton(
+                                              constraints: const BoxConstraints(),
+                                              padding: const EdgeInsets.all(10),
+                                              icon: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                                              onPressed: _pickImage,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
 
-                            // User Info Section
-                            if (!_isCurrentUser)
-                              Center(
-                                child: Column(
-                                  children: [
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
+                                // User Info Section
+                                if (!_isCurrentUser)
+                                  Center(
+                                    child: Column(
                                       children: [
-                                        Container(
-                                          width: 12,
-                                          height: 12,
-                                          decoration: BoxDecoration(
-                                            color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
-                                            shape: BoxShape.circle,
-                                            boxShadow: _userProfile!.isOnline ? [
-                                              BoxShadow(
-                                                color: Colors.greenAccent.withOpacity(0.5),
-                                                blurRadius: 8,
-                                                spreadRadius: 2,
-                                              )
-                                            ] : null,
-                                          ),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Container(
+                                              width: 12,
+                                              height: 12,
+                                              decoration: BoxDecoration(
+                                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                                shape: BoxShape.circle,
+                                                boxShadow: _userProfile!.isOnline ? [
+                                                  BoxShadow(
+                                                    color: Colors.greenAccent.withOpacity(0.5),
+                                                    blurRadius: 8,
+                                                    spreadRadius: 2,
+                                                  )
+                                                ] : null,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Text(
+                                              _userProfile!.isOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
+                                              style: TextStyle(
+                                                color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                              ),
+                                            ),
+                                          ],
                                         ),
-                                        const SizedBox(width: 10),
-                                        Text(
-                                          _userProfile!.isOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
-                                          style: TextStyle(
-                                            color: _userProfile!.isOnline ? Colors.greenAccent : Colors.grey,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 14,
-                                          ),
-                                        ),
+                                        const SizedBox(height: 24),
                                       ],
                                     ),
-                                    const SizedBox(height: 24),
-                                  ],
+                                  ),
+
+                                _buildInfoTile(
+                                  title: 'Username',
+                                  value: '@${_userProfile!.username}',
+                                  icon: Icons.alternate_email,
                                 ),
-                              ),
+                                const SizedBox(height: 16),
 
-                            _buildInfoTile(
-                              title: 'Username',
-                              value: '@${_userProfile!.username}',
-                              icon: Icons.alternate_email,
-                            ),
-                            const SizedBox(height: 16),
+                                _buildEditableTile(
+                                  title: 'Display Name',
+                                  controller: _displayNameController,
+                                  icon: Icons.person_outline,
+                                  isEditable: _isCurrentUser,
+                                  onUpdate: () {
+                                    _presenter.updateDisplayName(_displayNameController.text.trim());
+                                  },
+                                ),
+                                const SizedBox(height: 16),
 
-                            _buildEditableTile(
-                              title: 'Display Name',
-                              controller: _displayNameController,
-                              icon: Icons.person_outline,
-                              isEditable: _isCurrentUser,
-                              onUpdate: () {
-                                _presenter.updateDisplayName(_displayNameController.text.trim());
-                              },
-                            ),
-                            const SizedBox(height: 16),
+                                if (!_isCurrentUser)
+                                  _buildRelationshipTile(),
 
-                            if (!_isCurrentUser)
-                              _buildRelationshipTile(),
-
-                            const SizedBox(height: 32),
-                            if (_isCurrentUser) ...[
-                              const Divider(color: Colors.grey, thickness: 0.5),
-                              const SizedBox(height: 16),
-                              _buildDangerTile(
-                                title: 'Delete Account',
-                                subtitle: 'This action is permanent and cannot be undone',
-                                icon: Icons.delete_forever,
-                                onTap: () async {
-                                  final confirmDelete = await showDialog<bool>(
-                                    context: context,
-                                    builder: (BuildContext context) {
-                                      return AlertDialog(
-                                        backgroundColor: Colors.grey.shade900,
-                                        title: const Text('Delete Account', style: TextStyle(color: Colors.white)),
-                                        content: const Text('Are you sure you want to delete your account? This action cannot be undone.', style: TextStyle(color: Colors.grey)),
-                                        actions: <Widget>[
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(false),
-                                            child: const Text('Cancel', style: TextStyle(color: Colors.blueAccent)),
-                                          ),
-                                          TextButton(
-                                            onPressed: () => Navigator.of(context).pop(true),
-                                            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
-                                          ),
-                                        ],
+                                const SizedBox(height: 32),
+                                if (_isCurrentUser) ...[
+                                  const Divider(color: Colors.grey, thickness: 0.5),
+                                  const SizedBox(height: 16),
+                                  _buildDangerTile(
+                                    title: 'Delete Account',
+                                    subtitle: 'This action is permanent and cannot be undone',
+                                    icon: Icons.delete_forever,
+                                    onTap: () async {
+                                      final confirmDelete = await showDialog<bool>(
+                                        context: context,
+                                        builder: (BuildContext context) {
+                                          return AlertDialog(
+                                            backgroundColor: Colors.grey.shade900,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                            title: const Text('Delete Account', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                            content: const Text('Are you sure you want to delete your account? This action cannot be undone.', style: TextStyle(color: Colors.grey)),
+                                            actions: <Widget>[
+                                              TextButton(
+                                                onPressed: () => Navigator.of(context).pop(false),
+                                                child: Text('Cancel', style: TextStyle(color: Colors.grey.shade400)),
+                                              ),
+                                              TextButton(
+                                                onPressed: () => Navigator.of(context).pop(true),
+                                                child: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                                              ),
+                                            ],
+                                          );
+                                        },
                                       );
+                                      if (confirmDelete == true) {
+                                        _presenter.deleteAccount();
+                                      }
                                     },
-                                  );
-                                  if (confirmDelete == true) {
-                                    _presenter.deleteAccount();
-                                  }
-                                },
-                              ),
-                            ],
-                            const SizedBox(height: 32),
-                          ],
-                        ),
+                                  ),
+                                ],
+                                const SizedBox(height: 32),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+          ),
+          if (_isLoading && _userProfile != null)
+            Container(
+              color: Colors.black.withOpacity(0.5),
+              child: const Center(
+                child: CircularProgressIndicator(color: Colors.blueAccent),
+              ),
+            ),
+        ],
       ),
     );
   }

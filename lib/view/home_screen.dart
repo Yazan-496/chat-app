@@ -25,6 +25,7 @@ import 'package:my_chat_app/services/presence_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/model/user.dart' as app_user;
 import 'package:flutter/services.dart';
+import 'package:my_chat_app/utils/toast_utils.dart';
 
 class HomeScreen extends StatefulWidget {
   final String? initialChatId;
@@ -120,46 +121,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   @override
   void showMessage(String message) {
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-            decoration: BoxDecoration(
-              color: Colors.grey.shade900,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.4),
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.info_outline, color: Colors.blueAccent, size: 20),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    message,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          margin: EdgeInsets.only(
-            bottom: MediaQuery.of(context).size.height - 160,
-            left: 16,
-            right: 16,
-          ),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      ToastUtils.showCustomToast(context, message);
     }
   }
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:my_chat_app/presenter/auth_presenter.dart';
 import 'package:my_chat_app/view/auth_view.dart';
 import 'package:my_chat_app/view/home_screen.dart'; // New import
+import 'package:my_chat_app/utils/toast_utils.dart';
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -57,11 +58,7 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
 
   @override
   void showMessage(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-      ),
-    );
+    ToastUtils.showCustomToast(context, message);
   }
 
   @override

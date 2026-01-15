@@ -5,4 +5,6 @@ abstract class SettingsView {
   void updateNotificationSoundPath(String? path);
   void showMessage(String message);
   void updateView();
+  void showLoading();
+  void hideLoading();
 }
