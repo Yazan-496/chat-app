@@ -78,6 +78,7 @@ class _MessageItemState extends State<MessageItem> {
               maxWidth: MediaQuery.of(context).size.width * 0.75,
             ),
             child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onLongPress: () => widget.onLongPress(widget.message),
               onDoubleTap: () => widget.onDoubleTapReact(widget.message),
               onHorizontalDragUpdate: (details) {
