@@ -57,6 +57,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
 
   final Map<String, GlobalKey> _messageKeys = {};
   final ScrollController _scrollController = ScrollController();
+  double _lastBottomInset = 0;
 
   @override
   void initState() {
@@ -331,7 +332,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         if (!didPop && _showEmojiPicker) setState(() => _showEmojiPicker = false);
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF121212),
+        backgroundColor: Colors.black,
         resizeToAvoidBottomInset: true, // Let the OS handle viewport resizing
         appBar: ChatAppBar(
           chat: widget.chat,
@@ -348,10 +349,15 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           },
           child: Stack(
             children: [
-              // Layer 1: Main UI (Banner, Messages, Input)
+              // Layer 1: Main UI (Messages, Input)
               Column(
                 children: [
-                  ConnectionStatusBanner(isConnected: _isConnected, showRestoredMessage: _showRestoredMessage),
+                  // Spacer to push messages below the absolute-positioned banner
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    height: (!_isConnected || _showRestoredMessage) ? 30 : 0,
+                    color: Colors.black, // Match the background
+                  ),
                   Expanded(
                     child: ChatMessageList(
                       scrollController: _scrollController,
@@ -378,8 +384,8 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                     isRecording: _isRecording,
                     recordingDuration: _recordingDuration,
                     showEmojiPicker: _showEmojiPicker,
-                      isImagePickerOpen: _isImagePickerOpen,
-                      emojiTabIndex: _emojiTabIndex,
+                    isImagePickerOpen: _isImagePickerOpen,
+                    emojiTabIndex: _emojiTabIndex,
                     keyboardHeight: _keyboardHeight,
                     bottomInset: bottomInset,
                     replyingTo: _presenter.selectedMessageForReply,
@@ -410,7 +416,18 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                 ],
               ),
 
-              // Layer 2: Context Menu (Overlay)
+              // Layer 2: Fixed Banner (Always at top, prevents layout shifts)
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: ConnectionStatusBanner(
+                  isConnected: _isConnected, 
+                  showRestoredMessage: _showRestoredMessage
+                ),
+              ),
+
+              // Layer 3: Context Menu (Overlay)
               if (_menuMessage != null) Positioned.fill(child: _buildMessageMenu()),
             ],
           ),

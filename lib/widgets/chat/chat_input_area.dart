@@ -76,56 +76,60 @@ class _ChatInputAreaState extends State<ChatInputArea> {
     final double targetHeight = shouldMaintainSpace ? widget.keyboardHeight : 0;
     final double effectiveBottomPadding = (targetHeight - widget.bottomInset).clamp(0.0, widget.keyboardHeight);
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (widget.replyingTo != null) widget.buildActiveReplyPreview(widget.replyingTo!),
-        if (widget.editingMessage != null) widget.buildActiveEditIndicator(widget.editingMessage!),
-        Container(
-          padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 8),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade900,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2),
-                blurRadius: 4,
-                offset: const Offset(0, -2),
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Visibility(
-                visible: true, // Always keep in tree to preserve focus
-                maintainState: true,
-                child: Opacity(
-                  opacity: widget.isRecording ? 0.0 : 1.0,
-                  child: IgnorePointer(
-                    // Only ignore pointer events if we are recording AND the field isn't focused.
-                    // This helps keep the keyboard open if the user starts recording while typing.
-                    ignoring: widget.isRecording && !widget.focusNode.hasFocus,
-                    child: _buildNormalInputUI(),
+    return GestureDetector(
+      onTap: () {}, // Intercept taps to prevent them from bubbling up to ChatScreen's body detector
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.replyingTo != null) widget.buildActiveReplyPreview(widget.replyingTo!),
+          if (widget.editingMessage != null) widget.buildActiveEditIndicator(widget.editingMessage!),
+          Container(
+            padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade900,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 4,
+                  offset: const Offset(0, -2),
+                ),
+              ],
+            ),
+            child: Stack(
+              children: [
+                Visibility(
+                  visible: true, // Always keep in tree to preserve focus
+                  maintainState: true,
+                  child: Opacity(
+                    opacity: widget.isRecording ? 0.0 : 1.0,
+                    child: IgnorePointer(
+                      // Only ignore pointer events if we are recording AND the field isn't focused.
+                      // This helps keep the keyboard open if the user starts recording while typing.
+                      ignoring: widget.isRecording && !widget.focusNode.hasFocus,
+                      child: _buildNormalInputUI(),
+                    ),
                   ),
                 ),
-              ),
-              if (widget.isRecording) 
-                Positioned.fill(
-                  child: Container(
-                    color: Colors.grey.shade900, // Solid background to block taps to TextField
-                    child: _buildRecordingUI(),
+                if (widget.isRecording) 
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.grey.shade900, // Solid background to block taps to TextField
+                      child: _buildRecordingUI(),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-        // This SizedBox acts as the placeholder for either the emoji picker, 
-        // recording space, or the keyboard space.
-        if (shouldMaintainSpace || effectiveBottomPadding > 0)
-          SizedBox(
-            height: effectiveBottomPadding,
-            child: widget.showEmojiPicker ? _buildEmojiPicker() : const SizedBox.shrink(),
-          ),
-      ],
+          // This SizedBox acts as the placeholder for either the emoji picker, 
+          // recording space, or the keyboard space.
+          if (shouldMaintainSpace || effectiveBottomPadding > 0)
+            SizedBox(
+              height: effectiveBottomPadding,
+              child: widget.showEmojiPicker ? _buildEmojiPicker() : const SizedBox.shrink(),
+            ),
+        ],
+      ),
     );
   }
 
@@ -225,7 +229,7 @@ class _ChatInputAreaState extends State<ChatInputArea> {
                       },
                       child: const Padding(
                         padding: EdgeInsets.all(8.0),
-                        child: Text('🌝', style: TextStyle(fontSize: 28)),
+                        child: Text('🌝', style: TextStyle(fontSize: 24)),
                       ),
                     ),
             ),

@@ -49,6 +49,7 @@ class ChatMessageList extends StatelessWidget {
     return ListView.separated(
       controller: scrollController,
       reverse: true,
+      physics: const ClampingScrollPhysics(), // Prevent overscroll flickering
       itemCount: messages.length,
       padding: EdgeInsets.only(
         top: 10,
