@@ -9,6 +9,7 @@ class ChatInputArea extends StatefulWidget {
   final bool isRecording;
   final int recordingDuration;
   final bool showEmojiPicker;
+  final bool isImagePickerOpen;
   final int emojiTabIndex;
   final double keyboardHeight;
   final double bottomInset;
@@ -34,6 +35,7 @@ class ChatInputArea extends StatefulWidget {
     required this.isRecording,
     required this.recordingDuration,
     required this.showEmojiPicker,
+    required this.isImagePickerOpen,
     required this.emojiTabIndex,
     required this.keyboardHeight,
     required this.bottomInset,
@@ -68,11 +70,11 @@ class _ChatInputAreaState extends State<ChatInputArea> {
 
   @override
   Widget build(BuildContext context) {
-    // The emoji picker should occupy the same space as the keyboard.
-    // When the keyboard is animating, we compensate for the changing bottomInset
-    // to keep the input area at a stable vertical position.
-    final double emojiPickerHeight = widget.showEmojiPicker ? widget.keyboardHeight : 0;
-    final double effectiveBottomPadding = (emojiPickerHeight - widget.bottomInset).clamp(0.0, widget.keyboardHeight);
+    // Maintain the keyboard space if emoji picker, recording, OR image picker is open.
+    // This prevents the input area from jumping down when the keyboard closes.
+    final bool shouldMaintainSpace = widget.showEmojiPicker || widget.isRecording || widget.isImagePickerOpen;
+    final double targetHeight = shouldMaintainSpace ? widget.keyboardHeight : 0;
+    final double effectiveBottomPadding = (targetHeight - widget.bottomInset).clamp(0.0, widget.keyboardHeight);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -94,23 +96,31 @@ class _ChatInputAreaState extends State<ChatInputArea> {
           child: Stack(
             children: [
               Visibility(
-                visible: !widget.isRecording,
+                visible: true, // Always keep in tree to preserve focus
                 maintainState: true,
                 child: Opacity(
                   opacity: widget.isRecording ? 0.0 : 1.0,
                   child: IgnorePointer(
-                    ignoring: widget.isRecording,
+                    // Only ignore pointer events if we are recording AND the field isn't focused.
+                    // This helps keep the keyboard open if the user starts recording while typing.
+                    ignoring: widget.isRecording && !widget.focusNode.hasFocus,
                     child: _buildNormalInputUI(),
                   ),
                 ),
               ),
-              if (widget.isRecording) _buildRecordingUI(),
+              if (widget.isRecording) 
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.grey.shade900, // Solid background to block taps to TextField
+                    child: _buildRecordingUI(),
+                  ),
+                ),
             ],
           ),
         ),
-        // This SizedBox acts as the placeholder for either the emoji picker or the keyboard space.
-        // It shrinks as the keyboard (bottomInset) grows, and expands as the keyboard closes.
-        if (widget.showEmojiPicker || effectiveBottomPadding > 0)
+        // This SizedBox acts as the placeholder for either the emoji picker, 
+        // recording space, or the keyboard space.
+        if (shouldMaintainSpace || effectiveBottomPadding > 0)
           SizedBox(
             height: effectiveBottomPadding,
             child: widget.showEmojiPicker ? _buildEmojiPicker() : const SizedBox.shrink(),

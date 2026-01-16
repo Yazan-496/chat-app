@@ -44,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   Timer? _recordingTimer;
   int _recordingDuration = 0;
   bool _isRecording = false;
+  bool _isImagePickerOpen = false;
   double _keyboardHeight = 300.0;
   Message? _menuMessage;
   bool _showReactionsOnly = false;
@@ -169,6 +170,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   }
 
   void _showImageSourceSelection() {
+    setState(() => _isImagePickerOpen = true);
     showModalBottomSheet(
       context: context,
       builder: (context) => SafeArea(
@@ -194,7 +196,9 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           ],
         ),
       ),
-    );
+    ).then((_) {
+      if (mounted) setState(() => _isImagePickerOpen = false);
+    });
   }
 
   bool _isOnlyEmojis(String text) {
@@ -327,6 +331,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         if (!didPop && _showEmojiPicker) setState(() => _showEmojiPicker = false);
       },
       child: Scaffold(
+        backgroundColor: const Color(0xFF121212),
         resizeToAvoidBottomInset: true, // Let the OS handle viewport resizing
         appBar: ChatAppBar(
           chat: widget.chat,
@@ -335,83 +340,79 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           onBack: () => Navigator.of(context).pop(),
         ),
         body: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () {
-                  if (_showEmojiPicker) setState(() => _showEmojiPicker = false);
-                  // Removed automatic unfocus on body tap to prevent accidental keyboard closure.
-                  // Most chat apps only close the keyboard on scroll or specific actions.
-                },
-                child: Container(
-            color: const Color(0xFF121212),
-            child: Stack(
-              children: [
-                // Layer 1: Main UI (Banner, Messages, Input)
-                Column(
-                  children: [
-                    ConnectionStatusBanner(isConnected: _isConnected, showRestoredMessage: _showRestoredMessage),
-                    Expanded(
-                      child: RepaintBoundary(
-                        child: ChatMessageList(
-                          scrollController: _scrollController,
-                          messages: _messages,
-                          chat: widget.chat,
-                          presenter: _presenter,
-                          isLoading: _isLoading,
-                          messageKeys: _messageKeys,
-                          onReplyTap: _scrollToMessage,
-                          onLongPress: (m) => setState(() { _menuMessage = m; }),
-                          onDoubleTapReact: (m) => setState(() { _menuMessage = m; _showReactionsOnly = true; }),
-                          onSwipeReply: (m) { _presenter.selectMessageForReply(m); _inputFocusNode.requestFocus(); },
-                          buildReplyPreview: _buildReplyPreview,
-                          buildReactions: _buildReactions,
-                          buildMessageStatus: _buildMessageStatusWidget,
-                          isOnlyEmojis: _isOnlyEmojis,
-                          bottomPadding: 0, // Scaffold handles padding via resizing
-                        ),
-                      ),
-                    ),
-                    ChatInputArea(
-                      controller: _messageController,
-                      focusNode: _inputFocusNode,
+          behavior: HitTestBehavior.translucent,
+          onTap: () {
+            if (_showEmojiPicker) setState(() => _showEmojiPicker = false);
+            // Removed automatic unfocus on body tap to prevent accidental keyboard closure.
+            // Most chat apps only close the keyboard on scroll or specific actions.
+          },
+          child: Stack(
+            children: [
+              // Layer 1: Main UI (Banner, Messages, Input)
+              Column(
+                children: [
+                  ConnectionStatusBanner(isConnected: _isConnected, showRestoredMessage: _showRestoredMessage),
+                  Expanded(
+                    child: ChatMessageList(
+                      scrollController: _scrollController,
+                      messages: _messages,
+                      chat: widget.chat,
                       presenter: _presenter,
-                      isRecording: _isRecording,
-                      recordingDuration: _recordingDuration,
-                      showEmojiPicker: _showEmojiPicker,
-                      emojiTabIndex: _emojiTabIndex,
-                      keyboardHeight: _keyboardHeight,
-                      bottomInset: bottomInset,
-                      replyingTo: _presenter.selectedMessageForReply,
-                      editingMessage: _presenter.selectedMessageForEdit,
-                      onSend: _sendMessage,
-                      onToggleRecording: _toggleRecording,
-                      onCancelRecording: _cancelRecording,
-                      onImageSourceSelection: _showImageSourceSelection,
-                      onEmojiToggle: () {
-                        if (_showEmojiPicker) {
-                          _inputFocusNode.requestFocus();
-                        } else {
-                          // Ensure we set the state to show the picker BEFORE unfocusing
-                          // so that the build method can calculate the compensation correctly.
-                          setState(() => _showEmojiPicker = true);
-                          if (_inputFocusNode.hasFocus) {
-                            _inputFocusNode.unfocus();
-                          }
-                        }
-                      },
-                      onEmojiTabChanged: (index) => setState(() => _emojiTabIndex = index),
-                      yazanEmojis: _yazanEmojis,
-                      alineEmojis: _alineEmojis,
-                      bothEmojis: _bothEmojis,
-                      buildActiveReplyPreview: _buildActiveReplyPreview,
-                      buildActiveEditIndicator: _buildActiveEditIndicator,
+                      isLoading: _isLoading,
+                      messageKeys: _messageKeys,
+                      onReplyTap: _scrollToMessage,
+                      onLongPress: (m) => setState(() { _menuMessage = m; }),
+                      onDoubleTapReact: (m) => setState(() { _menuMessage = m; _showReactionsOnly = true; }),
+                      onSwipeReply: (m) { _presenter.selectMessageForReply(m); _inputFocusNode.requestFocus(); },
+                      buildReplyPreview: _buildReplyPreview,
+                      buildReactions: _buildReactions,
+                      buildMessageStatus: _buildMessageStatusWidget,
+                      isOnlyEmojis: _isOnlyEmojis,
+                      bottomPadding: 0, // Scaffold handles padding via resizing
                     ),
-                  ],
-                ),
+                  ),
+                  ChatInputArea(
+                    controller: _messageController,
+                    focusNode: _inputFocusNode,
+                    presenter: _presenter,
+                    isRecording: _isRecording,
+                    recordingDuration: _recordingDuration,
+                    showEmojiPicker: _showEmojiPicker,
+                      isImagePickerOpen: _isImagePickerOpen,
+                      emojiTabIndex: _emojiTabIndex,
+                    keyboardHeight: _keyboardHeight,
+                    bottomInset: bottomInset,
+                    replyingTo: _presenter.selectedMessageForReply,
+                    editingMessage: _presenter.selectedMessageForEdit,
+                    onSend: _sendMessage,
+                    onToggleRecording: _toggleRecording,
+                    onCancelRecording: _cancelRecording,
+                    onImageSourceSelection: _showImageSourceSelection,
+                    onEmojiToggle: () {
+                      if (_showEmojiPicker) {
+                        _inputFocusNode.requestFocus();
+                      } else {
+                        // Ensure we set the state to show the picker BEFORE unfocusing
+                        // so that the build method can calculate the compensation correctly.
+                        setState(() => _showEmojiPicker = true);
+                        if (_inputFocusNode.hasFocus) {
+                          _inputFocusNode.unfocus();
+                        }
+                      }
+                    },
+                    onEmojiTabChanged: (index) => setState(() => _emojiTabIndex = index),
+                    yazanEmojis: _yazanEmojis,
+                    alineEmojis: _alineEmojis,
+                    bothEmojis: _bothEmojis,
+                    buildActiveReplyPreview: _buildActiveReplyPreview,
+                    buildActiveEditIndicator: _buildActiveEditIndicator,
+                  ),
+                ],
+              ),
 
-                // Layer 2: Context Menu (Overlay)
-                if (_menuMessage != null) Positioned.fill(child: _buildMessageMenu()),
-              ],
-            ),
+              // Layer 2: Context Menu (Overlay)
+              if (_menuMessage != null) Positioned.fill(child: _buildMessageMenu()),
+            ],
           ),
         ),
       ),

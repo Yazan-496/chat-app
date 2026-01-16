@@ -12,44 +12,21 @@ class ConnectionStatusBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!isConnected) {
-      return Container(
-        width: double.infinity,
-        color: Colors.redAccent.withOpacity(0.9),
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.wifi_off, color: Colors.white, size: 14),
-            SizedBox(width: 8),
-            Text(
-              'No internet connection',
-              style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-            ),
-          ],
-        ),
-      );
-    }
+    final bool isVisible = !isConnected || showRestoredMessage;
 
-    if (showRestoredMessage) {
-      return Container(
-        width: double.infinity,
-        color: Colors.green.withOpacity(0.9),
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle, color: Colors.white, size: 14),
-            SizedBox(width: 8),
-            Text(
-              'Connection restored',
-              style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      height: isVisible ? 30 : 0,
+      width: double.infinity,
+      color: isConnected ? Colors.green : Colors.red,
+      child: isVisible 
+        ? Center(
+            child: Text(
+              isConnected ? 'Connection Restored' : 'No Internet Connection',
+              style: const TextStyle(color: Colors.white, fontSize: 12),
             ),
-          ],
-        ),
-      );
-    }
-
-    return const SizedBox.shrink();
+          )
+        : const SizedBox.shrink(),
+    );
   }
 }
