@@ -45,12 +45,20 @@ class UserRepository {
 
   Future<model.User?> _fetchAndCacheUser(String uid) async {
     print('UserRepository: Fetching user with ID from Supabase: $uid');
+    
+    // Don't even try if we know we are offline
+    if (!_supabase.realtime.isConnected) {
+      print('UserRepository: Offline, skipping fetch for user $uid');
+      return null;
+    }
+
     try {
       final data = await _supabase
           .from('profiles')
           .select()
           .eq('id', uid)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 5));
       
       if (data != null) {
         final user = model.User.fromMap(data);

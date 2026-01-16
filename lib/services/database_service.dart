@@ -72,6 +72,24 @@ class DatabaseService {
         .findAll();
   }
 
+  Future<List<Message>> getPendingMessages() async {
+    return await isar.messages
+        .filter()
+        .statusEqualTo(MessageStatus.sending)
+        .sortByTimestampDesc()
+        .findAll();
+  }
+
+  Future<int> getUnreadCount(String chatId, String userId) async {
+    return await isar.messages
+        .filter()
+        .chatIdEqualTo(chatId)
+        .receiverIdEqualTo(userId)
+        .not()
+        .statusEqualTo(MessageStatus.read)
+        .count();
+  }
+
   // Helper methods for Users
   Future<void> saveUser(User user) async {
     await isar.writeTxn(() async {

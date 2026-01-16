@@ -1,12 +1,13 @@
 import 'package:isar/isar.dart';
 import 'package:my_chat_app/model/relationship.dart';
 import 'package:my_chat_app/model/message.dart';
+import 'package:my_chat_app/utils/isar_utils.dart';
 
 part 'chat.g.dart';
 
 @collection
 class Chat {
-  Id get isarId => id.hashCode; // Use hashCode of the string ID as isarId
+  Id get isarId => fastHash(id);
 
   @Index(unique: true, replace: true)
   final String id;

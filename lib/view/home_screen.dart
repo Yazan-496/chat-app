@@ -85,6 +85,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               _isConnected = true;
               _showRestoredMessage = true;
             });
+            
+            // Sync pending messages that were sent while offline
+            _presenter?.syncPendingMessages();
+
             _restoredMessageTimer?.cancel();
             _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
               if (mounted) {
@@ -992,24 +996,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                            fontWeight: chat.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
                          ),
                       ),
+                      // Push status indicator to the far right
+                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                        const Spacer(),
+                        const Spacer(),
+                      // Status indicator in the same row as message and time with constant width
+                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                        SizedBox(
+                          width: 65,
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: chat.lastMessageStatus == MessageStatus.read
+                                ? _buildReadReceiptAvatar(chat)
+                                : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
+                          ),
+                        ),
                     ],
                   ),
                 ],
               ),
             ),
             
-            // Status indicator on the right with constant width to prevent layout shifts
-            if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
-              SizedBox(
-                width: 65,
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: chat.lastMessageStatus == MessageStatus.read
-                      ? _buildReadReceiptAvatar(chat)
-                      : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
-                ),
-              ),
-
             // Unread count badge for incoming messages
             if (chat.unreadCount > 0)
               Container(
@@ -1141,7 +1148,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     }
 
     String statusText;
-    Color textColor = chat.relationshipType.textColor.withOpacity(0.7);
+    Color textColor = Colors.grey;
 
     switch (status) {
       case MessageStatus.sending:
@@ -1172,7 +1179,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   Widget _buildReadReceiptAvatar(Chat chat) {
     return Padding(
-      padding: const EdgeInsets.only(left: 8.0),
+      padding: const EdgeInsets.only(left: 1.0),
       child: CircleAvatar(
         radius: 10,
         backgroundColor: chat.avatarColor != null 
