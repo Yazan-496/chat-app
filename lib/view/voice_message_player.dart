@@ -73,6 +73,10 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
   }
 
   Future<void> _setAudioSource() async {
+    if (widget.audioUrl.isEmpty) {
+      print('Error setting audio source: URL is empty');
+      return;
+    }
     try {
       await _audioPlayer.setSourceUrl(widget.audioUrl);
     } catch (e) {

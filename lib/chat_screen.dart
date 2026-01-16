@@ -48,6 +48,10 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   Timer? _recordingTimer;
   int _recordingDuration = 0;
   bool _isRecording = false;
+  bool _isExpanded = false;
+  double _keyboardHeight = 250.0;
+  Message? _menuMessage;
+  bool _showReactionsOnly = false;
 
   // New emoji reactions list
   final List<String> _emojiReactions = [
@@ -59,6 +63,8 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   final List<String> _bothEmojis = [
     '😌', '🙁', '😠', '🤭', '🤫', '👻', '🤡', '🤏', '💋', '💄', '🤶', '🎅', '💏', '🥀', '🌝', '🌚', '🥂', '🔫', '❤️', '💔', '🙂', '😒', '🫠', '😡', '✂️', '👍', '😂', '😮', '😢', '🙏'
   ];
+
+  final GlobalKey<State> _textFieldKey = GlobalKey();
 
   @override
   void initState() {
@@ -264,41 +270,10 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   }
 
   void _showReactionPicker(Message message) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 10),
-          margin: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade900,
-            borderRadius: BorderRadius.circular(30),
-          ),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: _emojiReactions.map((emoji) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                  child: GestureDetector(
-                    onTap: () {
-                      Navigator.pop(context);
-                      _presenter.addReaction(message.id, emoji);
-                    },
-                    child: Text(
-                      emoji,
-                      style: const TextStyle(fontSize: 32),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        );
-      },
-    );
+    setState(() {
+      _menuMessage = message;
+      _showReactionsOnly = true;
+    });
   }
 
   @override
@@ -308,9 +283,22 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     final editingMessage = _presenter.selectedMessageForEdit;
     final theme = Theme.of(context);
 
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      resizeToAvoidBottomInset: true,
+    if (MediaQuery.of(context).viewInsets.bottom > 0) {
+      _keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    }
+
+    return PopScope(
+      canPop: !_showEmojiPicker,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _showEmojiPicker) {
+          setState(() {
+            _showEmojiPicker = false;
+          });
+        }
+      },
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        resizeToAvoidBottomInset: false,
       appBar: AppBar(
         elevation: 0,
         backgroundColor: Colors.transparent, // Transparent for gradient background
@@ -409,11 +397,11 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: () {
-          setState(() {
-            _showEmojiPicker = false;
-          });
-          FocusManager.instance.primaryFocus?.unfocus();
-          SystemChannels.textInput.invokeMethod('TextInput.hide');
+          if (_showEmojiPicker) {
+            setState(() {
+              _showEmojiPicker = false;
+            });
+          }
         },
         child: Container(
         color: const Color(0xFF121212), // Solid dark background
@@ -465,9 +453,9 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                   : RepaintBoundary(
                       child: ListView.separated(
                         reverse: true,
-                        itemCount: _messages.length,
-                        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                        cacheExtent: 1000, // Preload items for smoother scrolling
+                            itemCount: _messages.length,
+                            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
+                            cacheExtent: 1000, // Preload items for smoother scrolling
                         // Optimization: Use a separate widget for items to prevent full list rebuilds
                         itemBuilder: (context, index) {
                         final message = _messages[index];
@@ -552,18 +540,20 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
             if (editingMessage != null)
               _buildActiveEditIndicator(editingMessage),
             _buildInputArea(),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeInOut,
-              height: _showEmojiPicker ? 250 : 0,
-              child: _showEmojiPicker ? _buildEmojiPicker() : const SizedBox.shrink(),
+            SizedBox(
+              height: _showEmojiPicker ? _keyboardHeight : (MediaQuery.of(context).viewInsets.bottom > 0 ? _keyboardHeight : 0),
+              child: _showEmojiPicker ? _buildEmojiPicker() : null,
             ),
+            // Extra padding for bottom safe area when no keyboard/emoji picker is shown
+            if (!_showEmojiPicker && MediaQuery.of(context).viewInsets.bottom == 0)
+              SizedBox(height: MediaQuery.of(context).padding.bottom),
           ],
         ),
       ),
-      ),
-    );
-  }
+    ),
+  ),
+);
+}
 
   bool _needsTimeHeader(Message current, Message? next) {
     if (next == null) return true;
@@ -594,59 +584,11 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     }
   }
 
-  void _onMessageLongPress(Message message) async {
-    final isMine = message.senderId == _presenter.currentUserId;
-    final canEdit = isMine && message.type == MessageType.text && !message.deleted;
-    final canDelete = isMine && !message.deleted;
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.black,
-      builder: (context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.reply, color: Colors.white),
-                title: const Text('Reply', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _presenter.selectMessageForReply(message);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.emoji_emotions, color: Colors.white),
-                title: const Text('React', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showReactionPicker(message);
-                },
-              ),
-              if (canEdit)
-                ListTile(
-                  leading: const Icon(Icons.edit, color: Colors.white),
-                  title: const Text('Edit', style: TextStyle(color: Colors.white)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _presenter.selectMessageForEdit(message);
-                    _messageController.text = message.editedContent ?? message.content;
-                    _inputFocusNode.requestFocus();
-                  },
-                ),
-              if (canDelete)
-                ListTile(
-                  leading: const Icon(Icons.delete, color: Colors.red),
-                  title: const Text('Delete', style: TextStyle(color: Colors.red)),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _presenter.deleteMessage(message);
-                  },
-                ),
-            ],
-          ),
-        );
-      },
-    );
+  void _onMessageLongPress(Message message) {
+    setState(() {
+      _menuMessage = message;
+      _showReactionsOnly = false;
+    });
   }
 
   String _formatLastSeen(DateTime? lastSeen) {
@@ -801,7 +743,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
 
   Widget _buildInputArea() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 18),
       decoration: BoxDecoration(
         color: Colors.grey.shade900,
         boxShadow: [
@@ -812,122 +754,211 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
           ),
         ],
       ),
-      child: _isRecording ? _buildRecordingUI() : _buildNormalInputUI(),
+      child: Stack(
+        children: [
+          // Normal Input UI - always in tree to keep keyboard/focus
+          Visibility(
+            visible: !_isRecording,
+            maintainState: true,
+            child: _buildNormalInputUI(),
+          ),
+          // Recording UI - overlays when recording
+          if (_isRecording)
+            _buildRecordingUI(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNormalInputUI() {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: _messageController,
+      builder: (context, value, child) {
+        final isTyping = value.text.isNotEmpty;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            // Stable leading icons section
+            IconButton(
+              icon: Icon(_isExpanded ? Icons.arrow_back_ios : Icons.arrow_forward_ios, color: Colors.pink, size: 22),
+              onPressed: () {
+                setState(() {
+                  _isExpanded = !_isExpanded;
+                });
+              },
+            ),
+            
+            if (_isExpanded) ...[
+              IconButton(
+                icon: const Icon(Icons.image, color: Colors.pink, size: 24),
+                onPressed: _showImageSourceSelection,
+              ),
+              IconButton(
+                icon: const Icon(Icons.mic_rounded, color: Colors.pink, size: 24),
+                onPressed: _toggleRecording,
+              ),
+            ],
+
+            // Text field with GlobalKey for focus stability
+            Expanded(
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxHeight: 200,
+                        ),
+                        child: TextField(
+                          key: _textFieldKey,
+                          controller: _messageController,
+                          focusNode: _inputFocusNode,
+                          maxLines: null,
+                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                          decoration: const InputDecoration(
+                            hintText: 'Message',
+                            hintStyle: TextStyle(color: Colors.white54),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(vertical: 10),
+                          ),
+                          onChanged: (text) {
+                            if (_showEmojiPicker) {
+                              setState(() {
+                                _showEmojiPicker = false;
+                              });
+                            }
+                            // Don't auto-collapse if we want to avoid blips, 
+                            // but usually icons hide when typing.
+                            if (text.isNotEmpty && _isExpanded) {
+                              setState(() {
+                                _isExpanded = false;
+                              });
+                            }
+                            _presenter.notifyTyping(text.isNotEmpty);
+                          },
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.emoji_emotions_rounded, color: Colors.pink, size: 24),
+                      onPressed: () {
+                        if (_showEmojiPicker) {
+                          _inputFocusNode.requestFocus();
+                        } else {
+                          // Note: To keep keyboard open, we DON'T unfocus.
+                          // But if we show emoji picker, they usually overlap.
+                          // User said: "closing keyboard mustt only user close it"
+                          setState(() {
+                            _showEmojiPicker = !_showEmojiPicker;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Send button or Quick Reaction
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4, left: 4),
+              child: isTyping
+                  ? IconButton(
+                      icon: const Icon(Icons.send_rounded, color: Colors.pink, size: 28),
+                      onPressed: _sendMessage,
+                    )
+                  : InkWell(
+                      onTap: () {
+                        _messageController.text = '🌝';
+                        _sendMessage();
+                      },
+                      child: const Padding(
+                        padding: EdgeInsets.all(8.0),
+                        child: Text('🌝', style: TextStyle(fontSize: 28)),
+                      ),
+                    ),
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildRecordingUI() {
     return Row(
       children: [
-        const SizedBox(width: 8),
-        Icon(Icons.mic, color: Colors.red.shade400, size: 28),
-        const SizedBox(width: 12),
-        Text(
-          _formatDuration(_recordingDuration),
-          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(width: 15),
-        const Expanded(
-          child: Text(
-            'Recording...',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-        ),
-        TextButton(
+        IconButton(
+          icon: const Icon(Icons.delete_rounded, color: Colors.pink, size: 28),
           onPressed: () async {
             _recordingTimer?.cancel();
-            await _presenter.stopRecordingAndCancel(); // Need to implement this in presenter
+            await _presenter.stopRecordingAndCancel();
             setState(() {
               _isRecording = false;
               _recordingDuration = 0;
             });
           },
-          child: const Text('Cancel', style: TextStyle(color: Colors.red)),
-        ),
-        IconButton(
-          icon: const Icon(Icons.send, color: Colors.purpleAccent, size: 28),
-          onPressed: _toggleRecording,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildNormalInputUI() {
-    return Row(
-      children: [
-        IconButton(
-          icon: Icon(
-            _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions,
-            color: Colors.white70,
-          ),
-          onPressed: () {
-            if (_showEmojiPicker) {
-              _inputFocusNode.requestFocus();
-            } else {
-              _inputFocusNode.unfocus();
-              SystemChannels.textInput.invokeMethod('TextInput.hide');
-              setState(() {
-                _showEmojiPicker = true;
-              });
-            }
-          },
         ),
         Expanded(
-          child: TextField(
-            controller: _messageController,
-            focusNode: _inputFocusNode,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: _presenter.selectedMessageForEdit != null
-                  ? 'Edit message...'
-                  : _presenter.selectedMessageForReply != null
-                      ? 'Reply to message...'
-                      : 'Type a message...',
-              hintStyle: const TextStyle(color: Colors.white54),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(25),
-                borderSide: BorderSide.none,
-              ),
-              filled: true,
-              fillColor: Colors.grey.shade800,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Container(
+            height: 50,
+            decoration: BoxDecoration(
+              color: Colors.pink,
+              borderRadius: BorderRadius.circular(25),
             ),
-            onChanged: (text) {
-              _presenter.notifyTyping(text.isNotEmpty);
-            },
-            onSubmitted: (text) {
-              if (text.trim().isNotEmpty) {
-                _sendMessage();
-              }
-            },
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.pause_rounded, color: Colors.pink, size: 20),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Center(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: List.generate(
+                          30,
+                          (index) => Container(
+                            width: 3,
+                            height: 3,
+                            margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    _formatDuration(_recordingDuration),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         IconButton(
-          icon: const Icon(Icons.attach_file, color: Colors.white70),
-          onPressed: _showImageSourceSelection,
-        ),
-        IconButton(
-          icon: const Icon(Icons.mic, color: Colors.white70),
+          icon: const Icon(Icons.send_rounded, color: Colors.pink, size: 28),
           onPressed: _toggleRecording,
-        ),
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: _messageController,
-          builder: (context, value, child) {
-            final isNotEmpty = value.text.trim().isNotEmpty;
-            return IconButton(
-              icon: isNotEmpty 
-                ? const Icon(Icons.send, color: Colors.purpleAccent)
-                : const Text('🌝', style: TextStyle(fontSize: 24)),
-              onPressed: () {
-                if (isNotEmpty) {
-                  _sendMessage();
-                } else {
-                  _messageController.text = '🌝';
-                  _sendMessage();
-                }
-              },
-            );
-          },
         ),
       ],
     );
