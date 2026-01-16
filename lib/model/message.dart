@@ -1,3 +1,9 @@
+import 'dart:convert';
+import 'package:isar/isar.dart';
+
+part 'message.g.dart';
+
+@enumerated
 enum MessageStatus {
   sending,
   sent,
@@ -5,24 +11,56 @@ enum MessageStatus {
   read,
 }
 
+@enumerated
 enum MessageType {
   text,
   voice,
   image,
 }
 
+@collection
 class Message {
+  Id get isarId => fastHash(id);
+
+  @Index(unique: true, replace: true)
   final String id;
+  
+  @Index()
   final String chatId;
+  
   final String senderId;
   final String receiverId;
+  
+  @enumerated
   final MessageType type;
+  
   final String content; // Encrypted for text, URL for media
+  
+  @Index()
   final DateTime timestamp;
+  
+  @enumerated
   MessageStatus status;
+  
   final String? replyToMessageId;
   final String? editedContent;
-  final Map<String, String> reactions; // userId: emoji
+  
+  @ignore
+  Map<String, String> reactions; // userId: emoji
+
+  String? get reactionsRaw => jsonEncode(reactions);
+  set reactionsRaw(String? value) {
+    if (value != null && value.isNotEmpty) {
+      try {
+        reactions = Map<String, String>.from(jsonDecode(value));
+      } catch (_) {
+        reactions = {};
+      }
+    } else {
+      reactions = {};
+    }
+  }
+  
   final bool deleted;
 
   Message({
@@ -39,6 +77,17 @@ class Message {
     this.reactions = const {},
     this.deleted = false,
   });
+
+  static int fastHash(String string) {
+    var hash = 0xcbf29ce484222325;
+    var i = 0;
+    while (i < string.length) {
+      var codeUnit = string.codeUnitAt(i++);
+      hash ^= codeUnit;
+      hash *= 0x100000001b3;
+    }
+    return hash;
+  }
 
   factory Message.fromMap(Map<String, dynamic> data) {
     return Message(

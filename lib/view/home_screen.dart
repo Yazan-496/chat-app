@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/main.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -633,7 +634,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ? Color(_currentUserProfile!.avatarColor!) 
                       : Colors.grey,
                   backgroundImage: _currentUserProfile?.profilePictureUrl != null
-                      ? NetworkImage(_currentUserProfile!.profilePictureUrl!)
+                      ? CachedNetworkImageProvider(_currentUserProfile!.profilePictureUrl!)
                       : null,
                   child: _currentUserProfile?.profilePictureUrl == null
                       ? Text(
@@ -730,7 +731,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
           ...discoveryResults.map((user) => ListTile(
             leading: CircleAvatar(
               backgroundColor: user.avatarColor != null ? Color(user.avatarColor!) : Colors.blue.shade300,
-              backgroundImage: user.profilePictureUrl != null ? NetworkImage(user.profilePictureUrl!) : null,
+              backgroundImage: user.profilePictureUrl != null ? CachedNetworkImageProvider(user.profilePictureUrl!) : null,
               child: user.profilePictureUrl == null ? Text(user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '') : null,
             ),
             title: Text(user.displayName, style: const TextStyle(color: Colors.white)),
@@ -779,7 +780,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         ? Color(chat.avatarColor!) 
                         : Colors.blue.shade300,
                     backgroundImage: chat.profilePictureUrl != null
-                        ? NetworkImage(chat.profilePictureUrl!)
+                        ? CachedNetworkImageProvider(chat.profilePictureUrl!)
                         : null,
                     child: chat.profilePictureUrl == null
                         ? Text(
@@ -867,7 +868,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ? Color(chat.avatarColor!) 
                       : Colors.blue.shade300,
                   backgroundImage: chat.profilePictureUrl != null
-                      ? NetworkImage(chat.profilePictureUrl!)
+                      ? CachedNetworkImageProvider(chat.profilePictureUrl!)
                       : null,
                   child: chat.profilePictureUrl == null
                       ? Text(
@@ -944,7 +945,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Expanded(
+                      Flexible(
                         child: Text(
                           (() {
                               String displayContent;
@@ -996,12 +997,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                 ],
               ),
             ),
-            // Read Status Indicator (Optional)
-            if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
-              (chat.lastMessageStatus == MessageStatus.read
-                  ? _buildReadReceiptAvatar(chat)
-                  : _buildMessageStatusIcon(chat.lastMessageStatus, chat)),
             
+            // Status indicator on the right with constant width to prevent layout shifts
+            if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+              SizedBox(
+                width: 65,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: chat.lastMessageStatus == MessageStatus.read
+                      ? _buildReadReceiptAvatar(chat)
+                      : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
+                ),
+              ),
+
             // Unread count badge for incoming messages
             if (chat.unreadCount > 0)
               Container(
@@ -1128,58 +1136,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   Widget _buildMessageStatusIcon(MessageStatus? status, Chat chat) {
     if (status == null) return const SizedBox.shrink();
 
-    IconData iconData;
-    Color iconColor = chat.relationshipType.textColor.withOpacity(0.7); // Use chat's text color for consistency
+    if (status == MessageStatus.read) {
+      return _buildReadReceiptAvatar(chat);
+    }
+
+    String statusText;
+    Color textColor = chat.relationshipType.textColor.withOpacity(0.7);
 
     switch (status) {
       case MessageStatus.sending:
-        iconData = Icons.access_time; // Clock icon for sending
+        statusText = 'sending';
         break;
       case MessageStatus.sent:
-        iconData = Icons.check; // Single check for sent
+        statusText = 'sent';
         break;
       case MessageStatus.delivered:
-        iconData = Icons.done_all; // Double check for delivered
+        statusText = 'delivered';
         break;
-      case MessageStatus.read:
-        iconData = Icons.done_all; // Double check for read
-        iconColor = chat.relationshipType.primaryColor; // Use chat's primary color for read
-        break;
+      default:
+        return const SizedBox.shrink();
     }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4.0),
-      child: Icon(
-        iconData,
-        size: 14,
-        color: iconColor,
+      child: Text(
+        statusText,
+        style: TextStyle(
+          fontSize: 10,
+          color: textColor,
+          fontStyle: FontStyle.italic,
+        ),
       ),
     );
   }
 
   Widget _buildReadReceiptAvatar(Chat chat) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4.0, right: 6.0),
-      child: Container(
-        width: 20,
-        height: 20,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white24, width: 2),
-        ),
-        child: CircleAvatar(
-          radius: 10,
-          backgroundImage: chat.profilePictureUrl != null
-              ? NetworkImage(chat.profilePictureUrl!)
-              : null,
-          backgroundColor: Colors.grey.shade700,
-          child: chat.profilePictureUrl == null
-              ? Text(
-                  chat.displayName.isNotEmpty ? chat.displayName[0] : '?',
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                )
-              : null,
-        ),
+      padding: const EdgeInsets.only(left: 8.0),
+      child: CircleAvatar(
+        radius: 10,
+        backgroundColor: chat.avatarColor != null 
+            ? Color(chat.avatarColor!) 
+            : Colors.blue.shade300,
+        backgroundImage: chat.profilePictureUrl != null
+            ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+            : null,
+        child: chat.profilePictureUrl == null
+            ? Text(
+                chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                style: const TextStyle(
+                  color: Colors.white, 
+                  fontWeight: FontWeight.bold, 
+                  fontSize: 8,
+                ),
+              )
+            : null,
       ),
     );
   }

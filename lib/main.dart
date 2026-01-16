@@ -12,6 +12,7 @@ import 'package:my_chat_app/services/presence_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
+import 'package:my_chat_app/services/database_service.dart';
 import 'package:my_chat_app/supabase_client.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -20,6 +21,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   await SupabaseManager.initialize();
+  await DatabaseService.initialize();
   
   // Initialize notification service
   await NotificationService.initNotifications();

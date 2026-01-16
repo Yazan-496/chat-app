@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/model/user.dart';
 import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
@@ -100,7 +101,7 @@ class _UserDiscoveryScreenState extends State<UserDiscoveryScreen> implements Us
                           child: ListTile(
                             leading: CircleAvatar(
                               backgroundImage: user.profilePictureUrl != null
-                                  ? NetworkImage(user.profilePictureUrl!)
+                                  ? CachedNetworkImageProvider(user.profilePictureUrl!)
                                   : null,
                               child: user.profilePictureUrl == null
                                   ? const Icon(Icons.person)

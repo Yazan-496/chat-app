@@ -1,19 +1,38 @@
+import 'package:isar/isar.dart';
 import 'package:my_chat_app/model/relationship.dart';
-import 'package:my_chat_app/model/message.dart'; // New import for MessageStatus
+import 'package:my_chat_app/model/message.dart';
 
+part 'chat.g.dart';
+
+@collection
 class Chat {
+  Id get isarId => id.hashCode; // Use hashCode of the string ID as isarId
+
+  @Index(unique: true, replace: true)
   final String id;
+  
   final List<String> participantIds;
+  
   final String displayName;
   final String? profilePictureUrl;
   final int? avatarColor;
+  
+  @enumerated
   final RelationshipType relationshipType;
+  
   final DateTime lastMessageTime;
   final String? lastMessageContent;
   final String? lastMessageSenderId;
-  final MessageStatus? lastMessageStatus;
+  
+  @enumerated
+  final MessageStatus lastMessageStatus;
+  
+  @ignore
   bool isOnline;
+  
+  @ignore
   DateTime? lastSeen;
+  
   int unreadCount;
 
   bool get isActuallyOnline {
@@ -34,7 +53,7 @@ class Chat {
     required this.lastMessageTime,
     this.lastMessageContent,
     this.lastMessageSenderId,
-    this.lastMessageStatus,
+    this.lastMessageStatus = MessageStatus.sent,
     this.isOnline = false,
     this.lastSeen,
     this.unreadCount = 0,
@@ -59,7 +78,7 @@ class Chat {
           ? MessageStatus.values.firstWhere(
               (e) => e.toString().split('.').last == data['last_message_status'].toString(),
               orElse: () => MessageStatus.sent)
-          : null,
+          : MessageStatus.sent,
       isOnline: false,
       lastSeen: null,
       unreadCount: (data['unread_count'] ?? data['unreadcount']) as int? ?? 0,
@@ -74,7 +93,7 @@ class Chat {
       'last_message_time': lastMessageTime.toIso8601String(),
       'last_message_content': lastMessageContent,
       'last_message_sender_id': lastMessageSenderId,
-      'last_message_status': lastMessageStatus?.toString().split('.').last,
+      'last_message_status': lastMessageStatus.toString().split('.').last,
       // Note: username, profile_picture_url, avatar_color, is_online, last_seen are NOT in the 'chats' table
     };
   }
