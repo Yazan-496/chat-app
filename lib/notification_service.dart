@@ -486,7 +486,7 @@ class NotificationService {
 
     final String notificationBody = _notificationBodyFor(message);
 
-    final avatar = await _getAvatarForChat(chat, senderName);
+    final avatar = await _getAvatarForChat(chat.profilePictureUrl, senderName, avatarColor: chat.avatarColor);
     final Person sender = Person(
       name: senderName,
       key: message.senderId,
@@ -573,6 +573,8 @@ class NotificationService {
       'sender_id': message.senderId,
       'sender_name': senderName,
       'message_body': notificationBody,
+      'sender_profile_url': chat.profilePictureUrl,
+      'sender_avatar_color': chat.avatarColor,
     });
 
     try {
@@ -610,7 +612,8 @@ class NotificationService {
         body = _notificationBodyFor(m);
       }
     } catch (_) {}
-    await _showBubble(chat.id, senderName, body);
+    final avatarData = await _getAvatarForChat(chat.profilePictureUrl, senderName, avatarColor: chat.avatarColor);
+    await _showBubble(chat.id, senderName, body, avatarPath: avatarData.filePath);
   }
 
   /// Handles notification responses when the app is in the foreground or background.
@@ -676,6 +679,8 @@ class NotificationService {
     final String? senderId = data['sender_id'];
     final String? senderName = data['sender_name'];
     final String? messageBody = data['message_body'];
+    final String? senderProfileUrl = data['sender_profile_url'];
+    final int? senderAvatarColor = data['sender_avatar_color'];
 
     if (chatId == null || messageId == null || senderId == null) {
       log('Missing chat_id, message_id, or sender_id in payload');
@@ -697,20 +702,21 @@ class NotificationService {
       _chatSeenMessageIds.remove(chatId);
     } else {
       final bool canBubble = await _canShowBubbles();
-      if (canBubble) {
-        await _showBubble(
-          chatId,
-          senderName ?? 'Messages',
-          messageBody ?? 'Tap to chat',
-        );
 
-      } else {
-        await _showBubble(
-          chatId,
-          senderName ?? 'Messages',
-          messageBody ?? 'Tap to chat',
-        );
-      }
+      final avatarData = await _getAvatarForChat(
+        senderProfileUrl, 
+        senderName ?? '', 
+        avatarColor: senderAvatarColor,
+      );
+      final avatarPath = avatarData.filePath;
+
+      await _showBubble(
+        chatId,
+        senderName ?? 'Messages',
+        messageBody ?? 'Tap to chat',
+        avatarPath: avatarPath,
+      );
+
       log(
         'Notifications: notification tapped chat=$chatId message=$messageId canBubble=$canBubble',
       );
@@ -740,7 +746,7 @@ class NotificationService {
     return false;
   }
 
-  static Future<void> _showBubble(String chatId, String title, String body) async {
+  static Future<void> _showBubble(String chatId, String title, String body, {String? avatarPath}) async {
     try {
       if (!Platform.isAndroid) return;
       // We don't check _canShowBubbles() or open settings here anymore,
@@ -749,6 +755,7 @@ class NotificationService {
         'chat_id': chatId,
         'title': title,
         'body': body,
+        'avatar_path': avatarPath,
       });
     } on PlatformException catch (e) {
       log(
@@ -825,10 +832,9 @@ class NotificationService {
     }
   }
 
-  static Future<_AvatarData> _getAvatarForChat(Chat chat, String senderName) async {
-    final url = chat.profilePictureUrl;
+  static Future<_AvatarData> _getAvatarForChat(String? url, String senderName, {int? avatarColor}) async {
     if (url == null || url.isEmpty) {
-      return _buildInitialsAvatarData(senderName);
+      return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
     }
 
     final cached = _avatarUrlToFilePath[url];
@@ -836,6 +842,7 @@ class NotificationService {
       return _AvatarData(
         bitmap: FilePathAndroidBitmap(cached),
         icon: BitmapFilePathAndroidIcon(cached),
+        filePath: cached,
       );
     }
 
@@ -846,12 +853,12 @@ class NotificationService {
       final file = File(filePath);
 
       final uri = Uri.tryParse(url);
-      if (uri == null) return _buildInitialsAvatarData(senderName);
+      if (uri == null) return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
 
       final request = await HttpClient().getUrl(uri);
       final response = await request.close();
       if (response.statusCode != 200) {
-        return _buildInitialsAvatarData(senderName);
+        return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
       }
 
       final bytes = await consolidateHttpClientResponseBytes(response);
@@ -860,13 +867,14 @@ class NotificationService {
       return _AvatarData(
         bitmap: FilePathAndroidBitmap(filePath),
         icon: BitmapFilePathAndroidIcon(filePath),
+        filePath: filePath,
       );
     } catch (_) {
-      return _buildInitialsAvatarData(senderName);
+      return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
     }
   }
 
-  static Future<_AvatarData> _buildInitialsAvatarData(String name) async {
+  static Future<_AvatarData> _buildInitialsAvatarData(String name, {int? colorValue}) async {
     if (!Platform.isAndroid) {
       return const _AvatarData(
         bitmap: DrawableResourceAndroidBitmap(_fallbackLargeIconResource),
@@ -875,10 +883,20 @@ class NotificationService {
     }
     final initial = _initialForAvatar(name);
     try {
-      final bytes = await _renderInitialAvatarPngBytes(initial);
+      final bytes = await _renderInitialAvatarPngBytes(initial, colorValue: colorValue);
+      
+      // Save to temp file for Bubbles
+      final tempDir = await getTemporaryDirectory();
+      final safeName = name.replaceAll(RegExp(r'[^\w]'), '_');
+      final fileName = 'avatar_initials_${safeName}_${colorValue ?? 'default'}.png';
+      final filePath = '${tempDir.path}${Platform.pathSeparator}$fileName';
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+
       return _AvatarData(
-        bitmap: ByteArrayAndroidBitmap(bytes),
-        icon: ByteArrayAndroidIcon(bytes),
+        bitmap: FilePathAndroidBitmap(filePath),
+        icon: BitmapFilePathAndroidIcon(filePath),
+        filePath: filePath,
       );
     } catch (_) {
       return const _AvatarData(
@@ -894,11 +912,20 @@ class NotificationService {
     return trimmed.substring(0, 1).toUpperCase();
   }
 
-  static Future<Uint8List> _renderInitialAvatarPngBytes(String initial) async {
+  static Future<Uint8List> _renderInitialAvatarPngBytes(String initial, {int? colorValue}) async {
     const int size = 256;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    final paint = Paint()..color = const Color(0xFF2F80ED);
+    
+    // Use provided color or fallback to blue (same as HomeScreen fallback logic essentially)
+    final color = colorValue != null ? Color(colorValue) : const Color(0xFF2F80ED); // Colors.blue.shade300 is roughly similar but let's stick to this or match exactly if user wants. User said "same it". 
+    // HomeScreen uses Colors.blue.shade300 if null. 0xFF2F80ED is standard blue.
+    // Let's use Colors.blue.shade300 value if we want to be exact? 
+    // Colors.blue.shade300 is Color(0xFF64B5F6).
+    // The previous code used 0xFF2F80ED. I will use the one from HomeScreen if colorValue is null.
+    // Actually HomeScreen: chat.avatarColor != null ? Color(chat.avatarColor!) : Colors.blue.shade300;
+    
+    final paint = Paint()..color = color;
     final rect = Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble());
     canvas.drawOval(rect, paint);
 
@@ -950,8 +977,13 @@ class NotificationService {
 class _AvatarData {
   final AndroidBitmap<Object> bitmap;
   final Object icon;
+  final String? filePath;
 
-  const _AvatarData({required this.bitmap, required this.icon});
+  const _AvatarData({
+    required this.bitmap,
+    required this.icon,
+    this.filePath,
+  });
 }
 
 /// A utility class to provide a global key for navigation.

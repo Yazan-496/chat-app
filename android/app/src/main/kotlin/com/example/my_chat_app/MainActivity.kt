@@ -17,6 +17,7 @@ import androidx.core.app.Person
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import android.app.PendingIntent
+import android.graphics.BitmapFactory
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -45,7 +46,8 @@ open class MainActivity : FlutterActivity() {
                         val chatId = (args?.get("chat_id") as? String).orEmpty()
                         val title = (args?.get("title") as? String).orEmpty()
                         val body = (args?.get("body") as? String).orEmpty()
-                        showBubbleNotification(chatId, title, body)
+                        val avatarPath = (args?.get("avatar_path") as? String)
+                        showBubbleNotification(chatId, title, body, avatarPath)
                         result.success(true)
                     } catch (e: Exception) {
                         Log.e("LoZoBubble", "showBubble failed", e)
@@ -164,13 +166,14 @@ open class MainActivity : FlutterActivity() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun showBubbleNotification(chatId: String, title: String, body: String) {
+    private fun showBubbleNotification(chatId: String, title: String, body: String, avatarPath: String?) {
         if (chatId.isBlank()) return
         ensureMessagesChannel()
 
-        val bubblesAllowed = canShowBubbles()
+        val manager = getSystemService<NotificationManager>()
+        val appAllowed = try { manager?.areBubblesAllowed() == true } catch (_: Exception) { false }
 
-        ensureConversationShortcut(chatId, title)
+        ensureConversationShortcut(chatId, title, avatarPath)
 
         val intent = Intent(this, BubbleActivity::class.java).apply {
             putExtra("chat_id", chatId)
@@ -184,16 +187,31 @@ open class MainActivity : FlutterActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         }
         val pendingIntent = PendingIntent.getActivity(this, chatId.hashCode(), intent, flags)
-        val bubbleIconUri = Uri.parse("android.resource://$packageName/${R.mipmap.ic_launcher}")
-        val bubbleIcon = IconCompat.createWithContentUri(bubbleIconUri)
+        
+        var bubbleIcon = IconCompat.createWithContentUri(Uri.parse("android.resource://$packageName/${R.mipmap.ic_launcher}"))
+        if (!avatarPath.isNullOrBlank()) {
+             try {
+                 bubbleIcon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
+             } catch (e: Exception) {
+                 Log.e("LoZoBubble", "Failed to load bubble icon from $avatarPath", e)
+             }
+        }
 
         val bubbleMeta = NotificationCompat.BubbleMetadata.Builder(pendingIntent, bubbleIcon)
             .setDesiredHeight(800)
-            .setAutoExpandBubble(bubblesAllowed)
-            .setSuppressNotification(bubblesAllowed)
+            .setAutoExpandBubble(false) // Don't auto-expand; let user tap.
+            .setSuppressNotification(appAllowed) // Suppress HUN if bubbles are allowed globally.
             .build()
 
-        val person = Person.Builder().setName(title.ifBlank { "Messages" }).build()
+        val personBuilder = Person.Builder().setName(title.ifBlank { "Messages" })
+        if (!avatarPath.isNullOrBlank()) {
+             try {
+                 val icon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
+                 personBuilder.setIcon(icon)
+             } catch (_: Exception) {}
+        }
+        val person = personBuilder.build()
+
         val messagingStyle = NotificationCompat.MessagingStyle(person)
             .addMessage(body.ifBlank { "Tap to chat" }, System.currentTimeMillis(), person)
 
@@ -213,7 +231,7 @@ open class MainActivity : FlutterActivity() {
 
         try {
             NotificationManagerCompat.from(this).notify(chatId.hashCode(), notification)
-            Log.d("LoZoBubble", "Bubble posted chatId=$chatId title=$title sdk=${Build.VERSION.SDK_INT} bubblesAllowed=$bubblesAllowed")
+            Log.d("LoZoBubble", "Bubble posted chatId=$chatId title=$title sdk=${Build.VERSION.SDK_INT} bubblesAllowed=$appAllowed")
         } catch (e: Exception) {
             Log.e(
                 "LoZoBubble",
@@ -224,7 +242,7 @@ open class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun ensureConversationShortcut(chatId: String, title: String) {
+    private fun ensureConversationShortcut(chatId: String, title: String, avatarPath: String?) {
         try {
             if (!ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
                 // Still OK; dynamic shortcuts can work even if pin not supported.
@@ -236,11 +254,23 @@ open class MainActivity : FlutterActivity() {
                 addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
 
-            val person = Person.Builder().setName(title.ifBlank { "Messages" }).build()
+            var icon = IconCompat.createWithResource(this, R.mipmap.ic_launcher)
+            if (!avatarPath.isNullOrBlank()) {
+                 try {
+                     icon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
+                 } catch (_: Exception) {}
+            }
+
+            val personBuilder = Person.Builder().setName(title.ifBlank { "Messages" })
+            if (!avatarPath.isNullOrBlank()) {
+                personBuilder.setIcon(icon)
+            }
+            val person = personBuilder.build()
+
             val shortcut = ShortcutInfoCompat.Builder(this, chatId)
                 .setShortLabel(title.ifBlank { "Chat" })
                 .setLongLabel(title.ifBlank { "Chat" })
-                .setIcon(IconCompat.createWithResource(this, R.mipmap.ic_launcher))
+                .setIcon(icon)
                 .setIntent(shortcutIntent)
                 .setLongLived(true)
                 .setPerson(person)
