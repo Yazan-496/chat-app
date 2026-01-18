@@ -742,7 +742,20 @@ class NotificationService {
       return false;
     }
   }
-
+  static Future<bool> isAppBubbleAllowed() async {
+    try {
+      if (!Platform.isAndroid) return false;
+      return await _bubbleChannel.invokeMethod<bool>('isAppBubbleAllowed') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+  static Future<void> openBubbleSettings() async {
+    try {
+      if (!Platform.isAndroid) return;
+      await _bubbleChannel.invokeMethod('requestBubblePermission');
+    } catch (_) {}
+  }
   static Future<bool> _maybeOpenBubbleSettings() async {
     try {
       if (!Platform.isAndroid) return false;

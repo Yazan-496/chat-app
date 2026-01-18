@@ -18,6 +18,9 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import android.app.PendingIntent
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Rect
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -166,6 +169,33 @@ open class MainActivity : FlutterActivity() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun createAdaptiveIcon(path: String): IconCompat? {
+        if (path.isBlank()) return null
+        return try {
+            val original = BitmapFactory.decodeFile(path) ?: return null
+            val size = original.width.coerceAtMost(original.height)
+            val opaque = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(opaque)
+            canvas.drawColor(android.graphics.Color.WHITE) // Background
+            
+            val srcRect: Rect
+            if (original.width > original.height) {
+                 val left = (original.width - original.height) / 2
+                 srcRect = Rect(left, 0, left + original.height, original.height)
+            } else {
+                 val top = (original.height - original.width) / 2
+                 srcRect = Rect(0, top, original.width, top + original.width)
+            }
+            val dstRect = Rect(0, 0, size, size)
+            canvas.drawBitmap(original, srcRect, dstRect, null)
+            
+            IconCompat.createWithAdaptiveBitmap(opaque)
+        } catch (e: Exception) {
+            Log.e("LoZoBubble", "createAdaptiveIcon failed", e)
+            null
+        }
+    }
+
     private fun showBubbleNotification(chatId: String, title: String, body: String, avatarPath: String?) {
         if (chatId.isBlank()) return
         ensureMessagesChannel()
@@ -190,10 +220,9 @@ open class MainActivity : FlutterActivity() {
         
         var bubbleIcon = IconCompat.createWithContentUri(Uri.parse("android.resource://$packageName/${R.mipmap.ic_launcher}"))
         if (!avatarPath.isNullOrBlank()) {
-             try {
-                 bubbleIcon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
-             } catch (e: Exception) {
-                 Log.e("LoZoBubble", "Failed to load bubble icon from $avatarPath", e)
+             val adaptive = createAdaptiveIcon(avatarPath!!)
+             if (adaptive != null) {
+                 bubbleIcon = adaptive
              }
         }
 
@@ -256,9 +285,10 @@ open class MainActivity : FlutterActivity() {
 
             var icon = IconCompat.createWithResource(this, R.mipmap.ic_launcher)
             if (!avatarPath.isNullOrBlank()) {
-                 try {
-                     icon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
-                 } catch (_: Exception) {}
+                 val adaptive = createAdaptiveIcon(avatarPath!!)
+                 if (adaptive != null) {
+                     icon = adaptive
+                 }
             }
 
             val personBuilder = Person.Builder().setName(title.ifBlank { "Messages" })
@@ -335,21 +365,6 @@ open class MainActivity : FlutterActivity() {
             return tryStart(intent)
         }
 
-        fun openAppNotificationSettings(): Boolean {
-            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-                    putExtra(Intent.EXTRA_PACKAGE_NAME, packageName)
-                }
-            } else {
-                Intent("android.settings.APP_NOTIFICATION_SETTINGS").apply {
-                    putExtra("app_package", packageName)
-                    putExtra("app_uid", applicationInfo.uid)
-                }
-            }
-            return tryStart(intent)
-        }
-
         fun openAppDetailsSettings(): Boolean {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 addCategory(Intent.CATEGORY_DEFAULT)
@@ -372,13 +387,17 @@ open class MainActivity : FlutterActivity() {
             true
         }
 
-        if (!appAllowed && openAppBubbleSettings()) return
-        if (!channelAllowed && openChannelSettings()) return
-
+        // Try the specific Bubble setting first and exclusively if possible.
+        if (openAppBubbleSettings()) return
+        
+        // If not supported (e.g. Android Q), try global bubble settings.
         if (tryStart(Intent("android.settings.BUBBLE_SETTINGS"))) return
         if (tryStart(Intent("android.settings.MANAGE_BUBBLE_SETTINGS"))) return
-
-        if (openAppNotificationSettings()) return
+        
+        // Fallback to open channel settings which might contain bubble settings on some devices,
+        // but avoid general app notification settings if possible as user requested.
+        if (openChannelSettings()) return
+        
         openAppDetailsSettings()
     }
 }
