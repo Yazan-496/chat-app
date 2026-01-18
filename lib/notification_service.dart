@@ -25,6 +25,11 @@ class NotificationService {
   
   static FlutterLocalNotificationsPlugin get flutterLocalNotificationsPlugin => _flutterLocalNotificationsPlugin;
 
+  static const MethodChannel _bubbleChannel =
+      MethodChannel('com.example.my_chat_app/bubbles');
+  static bool _bubbleChannelHandlerInstalled = false;
+  static DateTime? _lastBubbleSettingsOpenAt;
+
   static String? _activeChatId;
   static String? _pendingNavigationChatId;
   static final StreamController<String> _navigationStreamController =
@@ -104,63 +109,97 @@ class NotificationService {
           _onDidReceiveBackgroundNotificationResponse,
     );
 
-    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    _installBubbleChannelHandler();
+
+    // Clean up old duplicate channel if it exists
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v6');
+    // Clean up old duplicate channel if it exists
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v5');
+    // Clean up old duplicate channel if it exists
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v4');
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v3');
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v2');
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel_v1');
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.deleteNotificationChannel('messages_channel');
+
+    // Note: We primarily rely on the native side (MainActivity.kt) to create the
+    // 'messages_channel_v7' with the correct bubble permissions enabled.
+    // We declare it here just so the plugin is aware of it, but we trust the native creation first.
+    const AndroidNotificationChannel messagesChannelV7 = AndroidNotificationChannel(
+      'messages_channel_v7',
+      'Messages',
+      description: 'Notifications for new messages',
+      importance: Importance.max,
+      playSound: true,
+      enableVibration: true,
+      enableLights: true,
+      showBadge: true,
+    );
+
+    await _flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(messagesChannelV7);
+
+    const AndroidNotificationChannel backgroundServiceChannel = AndroidNotificationChannel(
       'my_chat_app_background',
-      'LoZo Chat Service',
-      description: 'Running in background to receive messages...',
-      importance: Importance.low,
+      'Background Service',
+      description: 'Running in background to receive messages',
+      importance: Importance.min, // Min importance hides it from status bar
+      showBadge: false,
     );
 
     await _flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
-
-    const AndroidNotificationChannel messagesChannel = AndroidNotificationChannel(
-      'messages_channel',
-      'Messages',
-      description: 'Notifications for new messages',
-      importance: Importance.max,
-    );
-
-    await _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(messagesChannel);
-
-    const AndroidNotificationChannel messagesChannelV2 = AndroidNotificationChannel(
-      'messages_channel_v2',
-      'Messages',
-      description: 'Notifications for new messages',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-      enableLights: true,
-      showBadge: true,
-    );
-
-    await _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(messagesChannelV2);
-
-    const AndroidNotificationChannel testChannel = AndroidNotificationChannel(
-      'lozo_test_channel_v1',
-      'LoZo Test',
-      description: 'Test notifications to validate system delivery',
-      importance: Importance.max,
-      playSound: true,
-      enableVibration: true,
-      enableLights: true,
-      showBadge: true,
-    );
-
-    await _flutterLocalNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(testChannel);
+        ?.createNotificationChannel(backgroundServiceChannel);
 
     _requestPermissions();
+  }
+
+  static void _installBubbleChannelHandler() {
+    if (_bubbleChannelHandlerInstalled) return;
+    _bubbleChannelHandlerInstalled = true;
+    _bubbleChannel.setMethodCallHandler((call) async {
+      if (call.method != 'onLaunchChatId') return null;
+      try {
+        final args = call.arguments;
+        String? chatId;
+        if (args is Map) {
+          final raw = args['chat_id'] ?? args['chatid'];
+          if (raw is String) chatId = raw;
+        } else if (args is String) {
+          chatId = args;
+        }
+        if (chatId != null && chatId.isNotEmpty) {
+          setPendingNavigationChatId(chatId);
+        }
+      } catch (e) {
+        log('Notifications: onLaunchChatId handler failed: $e');
+      }
+      return null;
+    });
   }
 
   static Future<bool> ensureAndroidNotificationsPermission() async {
@@ -297,91 +336,6 @@ class NotificationService {
     log('Global message listener stopped.');
   }
 
-  static void startTestNotificationEveryMinute() {
-    _testNotificationTimer?.cancel();
-    _testNotificationTimer = null;
-
-    flutterLocalNotificationsPlugin.cancel(_testImmediateNotificationId);
-    flutterLocalNotificationsPlugin.cancel(_testPeriodicNotificationId);
-
-    showTestNotification();
-    _schedulePeriodicTestNotification();
-
-    log('Notifications: test ticker started (immediate + periodic every minute)');
-  }
-
-  static Future<void> _schedulePeriodicTestNotification() async {
-    if (!Platform.isAndroid) return;
-    try {
-      final now = DateTime.now();
-      final avatar = await _buildInitialsAvatarData('Ma');
-      final Person sender = Person(
-        name: 'Ma',
-        key: 'lozo_test_sender',
-        icon: avatar.icon as dynamic,
-      );
-      final MessagingStyleInformation messagingStyle = MessagingStyleInformation(
-        sender,
-        groupConversation: false,
-        messages: <Message>[
-          Message('Hi', now, sender),
-        ],
-      );
-
-      final androidDetails = AndroidNotificationDetails(
-        'lozo_test_channel_v1',
-        'LoZo Test',
-        channelDescription: 'Test notifications to validate system delivery',
-        importance: Importance.max,
-        priority: Priority.high,
-        icon: 'ic_stat_lozo',
-        category: AndroidNotificationCategory.message,
-        shortcutId: 'lozo_test_chat',
-        styleInformation: messagingStyle,
-        enableLights: true,
-        enableVibration: true,
-        vibrationPattern: Int64List.fromList(<int>[0, 250, 120, 250]),
-        playSound: true,
-        channelShowBadge: true,
-        visibility: NotificationVisibility.public,
-        onlyAlertOnce: false,
-        autoCancel: true,
-        largeIcon: avatar.bitmap,
-        showWhen: true,
-        when: now.millisecondsSinceEpoch,
-        subText: 'Messages',
-        actions: <AndroidNotificationAction>[
-          AndroidNotificationAction(
-            'test_mark_read_action',
-            'Mark as read',
-            cancelNotification: true,
-            showsUserInterface: false,
-          ),
-          AndroidNotificationAction(
-            'test_reply_action',
-            'Reply',
-            inputs: <AndroidNotificationActionInput>[
-              AndroidNotificationActionInput(label: 'Reply'),
-            ],
-            showsUserInterface: true,
-          ),
-        ],
-      );
-
-      await _flutterLocalNotificationsPlugin.periodicallyShow(
-        _testPeriodicNotificationId,
-        'Ma',
-        'Hi',
-        RepeatInterval.everyMinute,
-        NotificationDetails(android: androidDetails),
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      );
-
-      log('Notifications: periodic test scheduled');
-    } catch (e) {
-      log('Notifications: periodic test scheduling failed: $e');
-    }
-  }
 
   static Future<void> showTestNotification() async {
     try {
@@ -554,7 +508,7 @@ class NotificationService {
 
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'messages_channel_v2',
+      'messages_channel_v7',
       'Messages',
       channelDescription: 'Notifications for new messages',
       importance: Importance.max,
@@ -594,12 +548,6 @@ class NotificationService {
           cancelNotification: false,
           allowGeneratedReplies: true,
           semanticAction: SemanticAction.reply,
-        ),
-        AndroidNotificationAction(
-          'bubble_action',
-          'Bubble',
-          cancelNotification: false,
-          showsUserInterface: false,
         ),
       ],
       // This is crucial for showing the custom UI for reply
@@ -648,97 +596,21 @@ class NotificationService {
   /// This is used by the "Show as Bubble" UI action.
   static Future<void> showBubbleForChat(Chat chat) async {
     final String senderName = chat.displayName;
-    // We need a unique ID for the bubble notification, usually based on chat ID
-    final int notificationId = chat.id.hashCode;
-
-    // Identify the "other" person in the chat for the Person object
-    final currentUserId = SupabaseManager.client.auth.currentUser?.id;
-    final otherUserId = chat.participantIds.firstWhere((id) => id != currentUserId, orElse: () => 'unknown');
-
-    final avatar = await _getAvatarForChat(chat, senderName);
-    final Person sender = Person(
-      name: senderName,
-      key: otherUserId,
-      bot: false,
-      important: true,
-      icon: avatar.icon as dynamic,
-    );
-
-    final MessagingStyleInformation messagingStyle = MessagingStyleInformation(
-      sender,
-      groupConversation: false,
-      messages: [
-        Message(
-          'Tap to chat', // Dummy message to activate the bubble
-          DateTime.now(),
-          sender,
-        ),
-      ],
-    );
-
-    final AndroidNotificationDetails androidPlatformChannelSpecifics =
-        AndroidNotificationDetails(
-      'messages_channel_v2',
-      'Messages',
-      channelDescription: 'Notifications for new messages',
-      importance: Importance.max,
-      priority: Priority.high,
-      ticker: 'ticker',
-      category: AndroidNotificationCategory.message,
-      styleInformation: messagingStyle,
-      shortcutId: chat.id,
-      icon: 'ic_stat_lozo',
-      largeIcon: avatar.bitmap,
-      enableLights: true,
-      enableVibration: true,
-      vibrationPattern: Int64List.fromList(<int>[0, 250, 120, 250]),
-      playSound: true,
-      channelShowBadge: true,
-      visibility: NotificationVisibility.public,
-      onlyAlertOnce: false,
-      autoCancel: true,
-      showWhen: true,
-      when: DateTime.now().millisecondsSinceEpoch,
-      subText: 'Messages',
-      actions: <AndroidNotificationAction>[
-        AndroidNotificationAction(
-          'mark_read_action',
-          'Mark as read',
-          cancelNotification: true,
-          showsUserInterface: false,
-          semanticAction: SemanticAction.markAsRead,
-        ),
-        AndroidNotificationAction(
-          'reply_action',
-          'Reply',
-          inputs: <AndroidNotificationActionInput>[
-            AndroidNotificationActionInput(label: 'Reply'),
-          ],
-          showsUserInterface: false,
-          cancelNotification: false,
-          allowGeneratedReplies: true,
-          semanticAction: SemanticAction.reply,
-        ),
-      ],
-    );
-
-    final NotificationDetails platformChannelSpecifics = NotificationDetails(
-      android: androidPlatformChannelSpecifics,
-    );
-
-    final payload = jsonEncode({
-      'chat_id': chat.id,
-      'message_id': 'manual_bubble',
-      'sender_id': otherUserId,
-    });
-
-    await flutterLocalNotificationsPlugin.show(
-      notificationId,
-      senderName,
-      'Tap to chat',
-      platformChannelSpecifics,
-      payload: payload,
-    );
+    String body = 'Tap to chat';
+    try {
+      final latest = await SupabaseManager.client
+          .from('messages')
+          .select()
+          .eq('chat_id', chat.id)
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      if (latest != null) {
+        final m = app_message.Message.fromMap(latest);
+        body = _notificationBodyFor(m);
+      }
+    } catch (_) {}
+    await _showBubble(chat.id, senderName, body);
   }
 
   /// Handles notification responses when the app is in the foreground or background.
@@ -783,6 +655,16 @@ class NotificationService {
       'input=${notificationResponse.input} '
       'payload=$payload',
     );
+    if (notificationResponse.actionId == 'test_reply_action') {
+      final replyText = notificationResponse.input;
+      log('Notifications: test reply action input=$replyText');
+      return;
+    }
+    if (notificationResponse.actionId == 'test_mark_read_action') {
+      log('Notifications: test mark read action');
+      return;
+    }
+
     if (payload == null) {
       log('Notification payload is null');
       return;
@@ -813,29 +695,66 @@ class NotificationService {
       await _markAsRead(chatId, messageId, senderId);
       _chatNotificationMessages.remove(chatId);
       _chatSeenMessageIds.remove(chatId);
-    } else if (notificationResponse.actionId == 'bubble_action') {
-      setPendingNavigationChatId(chatId);
-      await _showBubble(chatId, senderName ?? 'Messages', messageBody ?? 'Tap to chat');
-    } else if (notificationResponse.actionId == 'test_reply_action') {
-      final replyText = notificationResponse.input;
-      log('Notifications: test reply action input=$replyText');
-    } else if (notificationResponse.actionId == 'test_mark_read_action') {
-      log('Notifications: test mark read action');
     } else {
-      setPendingNavigationChatId(chatId);
-      log('Notifications: notification tapped chat=$chatId message=$messageId');
+      final bool canBubble = await _canShowBubbles();
+      if (canBubble) {
+        await _showBubble(
+          chatId,
+          senderName ?? 'Messages',
+          messageBody ?? 'Tap to chat',
+        );
+
+      } else {
+        await _showBubble(
+          chatId,
+          senderName ?? 'Messages',
+          messageBody ?? 'Tap to chat',
+        );
+      }
+      log(
+        'Notifications: notification tapped chat=$chatId message=$messageId canBubble=$canBubble',
+      );
     }
+  }
+
+  static Future<bool> _canShowBubbles() async {
+    try {
+      if (!Platform.isAndroid) return false;
+      return await _bubbleChannel.invokeMethod<bool>('canShowBubbles') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> _maybeOpenBubbleSettings() async {
+    try {
+      if (!Platform.isAndroid) return false;
+      final now = DateTime.now();
+      final last = _lastBubbleSettingsOpenAt;
+      final shouldOpen = last == null || now.difference(last).inSeconds >= 20;
+      if (!shouldOpen) return false;
+      _lastBubbleSettingsOpenAt = now;
+      await _bubbleChannel.invokeMethod('requestBubblePermission');
+      return true;
+    } catch (_) {}
+    return false;
   }
 
   static Future<void> _showBubble(String chatId, String title, String body) async {
     try {
       if (!Platform.isAndroid) return;
-      const platform = MethodChannel('com.example.my_chat_app/bubbles');
-      await platform.invokeMethod('showBubble', <String, dynamic>{
+      // We don't check _canShowBubbles() or open settings here anymore,
+      // assuming user has granted permissions or we just try best-effort.
+      await _bubbleChannel.invokeMethod('showBubble', <String, dynamic>{
         'chat_id': chatId,
         'title': title,
         'body': body,
       });
+    } on PlatformException catch (e) {
+      log(
+        'Notifications: bubble show failed '
+        'code=${e.code} message=${e.message} details=${e.details}',
+      );
     } catch (e) {
       log('Notifications: bubble show failed: $e');
     }

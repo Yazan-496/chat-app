@@ -111,8 +111,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
     // Listen for notification taps while the app is in foreground
     _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
-      NotificationService.setPendingNavigationChatId(chatId);
-      _checkAndNavigate();
+      // Only set pending ID and navigate if we are NOT already on the home screen
+      // or if the chat ID is different from what we might be viewing.
+      // But wait! This is HomeScreen. If we are here, we are on the list.
+      // So we should just navigate.
+      
+      // Prevent infinite loops if the stream emits repeatedly for the same ID
+      // by checking if we are already navigating or if it's a stale event?
+      // Actually, setPendingNavigationChatId might be re-triggering this.
+      
+      // Let's consume it immediately to prevent re-reads
+      if (NotificationService.consumePendingNavigationChatId() == chatId) {
+         _checkAndNavigateWithId(chatId);
+      }
     });
 
     // Periodic timer to refresh "last seen" labels (e.g., from "1s ago" to "2s ago")
@@ -259,8 +270,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                      _consumeInitialChatId() ?? 
                      NotificationService.consumePendingNavigationChatId();
     
-    if (pendingId == null) return;
+    if (pendingId != null) {
+      _checkAndNavigateWithId(pendingId);
+    }
+  }
 
+  Future<void> _checkAndNavigateWithId(String pendingId) async {
     debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
     
     Chat? target;

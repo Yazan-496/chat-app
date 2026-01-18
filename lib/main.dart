@@ -26,8 +26,6 @@ Future<void> initializeBackgroundService() async {
       autoStart: true,
       isForegroundMode: true, // Required to keep service alive
       notificationChannelId: 'my_chat_app_background',
-      initialNotificationTitle: 'LoZo Chat Service',
-      initialNotificationContent: 'Running in background to receive messages...',
       foregroundServiceNotificationId: 888,
     ),
     iosConfiguration: IosConfiguration(
@@ -54,9 +52,6 @@ void main() async {
   await NotificationService.initNotifications();
   final notificationsGranted =
       await NotificationService.ensureAndroidNotificationsPermission();
-  if (notificationsGranted) {
-    NotificationService.startTestNotificationEveryMinute();
-  }
   
   // Initialize background service
   if (notificationsGranted) {
