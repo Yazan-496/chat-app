@@ -28,6 +28,20 @@ subprojects {
 }
 
 subprojects {
+    afterEvaluate {
+        val android = project.extensions.findByName("android") as? com.android.build.gradle.BaseExtension
+        android?.apply {
+            compileSdkVersion(36)
+            buildToolsVersion("36.0.0")
+            
+            defaultConfig {
+                targetSdkVersion(36)
+            }
+        }
+    }
+}
+
+subprojects {
     plugins.configureEach {
         if (this is com.android.build.gradle.BasePlugin) {
             val android = project.extensions.getByName("android") as com.android.build.gradle.BaseExtension

@@ -22,7 +22,6 @@ import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
 import 'package:my_chat_app/view/relationship_selection_dialog.dart';
 import 'package:my_chat_app/notification_service.dart';
-import 'package:my_chat_app/services/bubble_service.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/model/user.dart' as app_user;
@@ -52,7 +51,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   bool _isDiscoveryLoading = false;
   app_user.User? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
-  StreamSubscription<String>? _bubbleNavigationSubscription;
   RealtimeChannel? _statusChannel;
   String? _initialChatId;
   Timer? _statusUpdateTimer;
@@ -117,12 +115,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       _checkAndNavigate();
     });
 
-    // Listen for bubble taps while the app is in foreground
-    _bubbleNavigationSubscription = BubbleService.navigationStream.listen((chatId) {
-      NotificationService.setPendingNavigationChatId(chatId);
-      _checkAndNavigate();
-    });
-
     // Periodic timer to refresh "last seen" labels (e.g., from "1s ago" to "2s ago")
     _statusUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (mounted) {
@@ -136,7 +128,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   @override
   void dispose() {
     _navigationSubscription?.cancel();
-    _bubbleNavigationSubscription?.cancel();
     if (_statusChannel != null) {
       _supabase.removeChannel(_statusChannel!);
     }
@@ -996,14 +987,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                            fontWeight: chat.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
                          ),
                       ),
-                      // Push status indicator to the far right
+                    
+                    ],
+                  ),
+                ],
+              ),
+            ),
+              // Push status indicator to the far right
                       if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
-                        const Spacer(),
-                        const Spacer(),
+                        // const Spacer(),
+                        // const Spacer(),
                       // Status indicator in the same row as message and time with constant width
                       if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
                         SizedBox(
-                          width: 65,
+                          width: 55,
                           child: Align(
                             alignment: Alignment.centerRight,
                             child: chat.lastMessageStatus == MessageStatus.read
@@ -1011,12 +1008,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                                 : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
                           ),
                         ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            
             // Unread count badge for incoming messages
             if (chat.unreadCount > 0)
               Container(
@@ -1114,15 +1105,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                 title: const Text('Show as Bubble', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   Navigator.pop(context);
-                  await BubbleService.instance.start(
-                    chatId: chat.id,
-                    title: chat.displayName,
-                    body: 'Tap to chat',
-                  );
-                  try {
-                    const platform = MethodChannel('com.example.my_chat_app/bubbles');
-                    await platform.invokeMethod('moveTaskToBack');
-                  } catch (_) {}
+                  await NotificationService.showBubbleForChat(chat);
                 },
               ),
               ListTile(

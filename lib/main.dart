@@ -11,20 +11,57 @@ import 'package:my_chat_app/view/splash_screen.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
-import 'package:flutter/services.dart';
 import 'package:my_chat_app/services/database_service.dart';
 import 'package:my_chat_app/supabase_client.dart';
+import 'package:my_chat_app/services/background_service.dart' as shim;
+import 'package:flutter_background_service/flutter_background_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+Future<void> initializeBackgroundService() async {
+  final service = FlutterBackgroundService();
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: shim.onStart,
+      autoStart: true,
+      isForegroundMode: true, // Required to keep service alive
+      notificationChannelId: 'my_chat_app_background',
+      initialNotificationTitle: 'LoZo Chat Service',
+      initialNotificationContent: 'Running in background to receive messages...',
+      foregroundServiceNotificationId: 888,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: shim.onStart,
+      onBackground: (ServiceInstance service) {
+          return true;
+      }, 
+    ),
+  );
+  
+  await service.startService();
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  final void Function(ServiceInstance) _ = shim.onStart;
+
   await SupabaseManager.initialize();
   await DatabaseService.initialize();
   
   // Initialize notification service
   await NotificationService.initNotifications();
+  final notificationsGranted =
+      await NotificationService.ensureAndroidNotificationsPermission();
+  if (notificationsGranted) {
+    NotificationService.startTestNotificationEveryMinute();
+  }
+  
+  // Initialize background service
+  if (notificationsGranted) {
+    await initializeBackgroundService();
+  }
   
   runApp(const MainApp());
 }
@@ -97,9 +134,17 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     if (state == AppLifecycleState.resumed) {
       _presenceService.setUserOnline(user.id);
       NotificationService.startGlobalMessageListener(user.id);
+      
+      // Tell background service we are in foreground, so it can stop listening
+      FlutterBackgroundService().invoke('app_in_foreground');
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
-      // Scenario 1: Graceful Exit - Set offline when app is minimized, backgrounded, or killed
-      _presenceService.setUserOffline(user.id);
+      if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+        _presenceService.setUserOffline(user.id);
+        NotificationService.stopGlobalMessageListener();
+        
+        // Tell background service we are in background, so it can start listening
+        FlutterBackgroundService().invoke('app_in_background');
+      }
     }
   }
 
