@@ -487,6 +487,17 @@ class NotificationService {
     final String notificationBody = _notificationBodyFor(message);
 
     final avatar = await _getAvatarForChat(chat.profilePictureUrl, senderName, avatarColor: chat.avatarColor);
+    
+    if (Platform.isAndroid) {
+      await _showBubble(
+        chat.id,
+        senderName,
+        notificationBody,
+        avatarPath: avatar.filePath,
+      );
+      return;
+    }
+
     final Person sender = Person(
       name: senderName,
       key: message.senderId,
