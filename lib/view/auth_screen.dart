@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/presenter/auth_presenter.dart';
 import 'package:my_chat_app/view/auth_view.dart';
 import 'package:my_chat_app/view/home_screen.dart'; // New import
@@ -167,7 +168,7 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
                                     radius: 30,
                                     backgroundColor: Colors.grey.shade900,
                                     backgroundImage: user.profilePictureUrl != null
-                                        ? NetworkImage(user.profilePictureUrl!)
+                                        ? CachedNetworkImageProvider(user.profilePictureUrl!)
                                         : null,
                                     child: user.profilePictureUrl == null
                                         ? Text(

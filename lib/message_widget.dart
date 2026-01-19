@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/model/message.dart';
 import 'package:my_chat_app/view/voice_message_player.dart';
 
@@ -61,7 +62,7 @@ class _MessageItemState extends State<MessageItem> {
                           ? Color(widget.avatarColor!) 
                           : Colors.blue.shade300,
                       backgroundImage: widget.profilePictureUrl != null
-                          ? NetworkImage(widget.profilePictureUrl!)
+                          ? CachedNetworkImageProvider(widget.profilePictureUrl!)
                           : null,
                       child: widget.profilePictureUrl == null
                           ? Text(
@@ -139,7 +140,18 @@ class _MessageItemState extends State<MessageItem> {
                         if (widget.message.type == MessageType.image)
                           ClipRRect(
                             borderRadius: BorderRadius.circular(12),
-                            child: Image.network(widget.message.content, width: 200, fit: BoxFit.cover),
+                            child: CachedNetworkImage(
+                              imageUrl: widget.message.content,
+                              width: 200,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) => Container(
+                                width: 200,
+                                height: 200,
+                                color: Colors.grey.shade800,
+                                child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                              ),
+                              errorWidget: (context, url, error) => const Icon(Icons.error),
+                            ),
                           ),
                         if (widget.message.type == MessageType.voice)
                           Padding(

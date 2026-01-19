@@ -1,45 +1,73 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/model/user.dart' as model;
+import 'package:my_chat_app/services/database_service.dart';
 import 'dart:io';
 
 class UserRepository {
   final SupabaseClient _supabase = Supabase.instance.client;
+  final DatabaseService _dbService = DatabaseService();
 
   /// Retrieves a stream of the current user's data from Supabase.
   /// This allows for real-time updates to the user's profile.
   Stream<model.User?> getCurrentUserStream(String uid) {
+    // For offline-first, we can combine the local database and Supabase stream.
+    // However, Supabase's stream is already real-time.
+    // We'll update the local cache whenever the stream emits a new value.
     return _supabase
         .from('profiles')
         .stream(primaryKey: ['id'])
         .eq('id', uid)
         .map((data) {
           if (data.isNotEmpty) {
-            return model.User.fromMap(data.first);
+            final user = model.User.fromMap(data.first);
+            _dbService.saveUser(user); // Cache it
+            return user;
           } else {
             return null;
           }
         });
   }
 
-  /// Retrieves a single instance of a user's data from Supabase by their UID.
+  /// Retrieves a single instance of a user's data.
+  /// Offline-First: Returns local data immediately if available, then fetches from Supabase.
   Future<model.User?> getUser(String uid) async {
-    print('UserRepository: Fetching user with ID: $uid');
+    // Try local first
+    final localUser = await _dbService.getUser(uid);
+    if (localUser != null) {
+      print('UserRepository: Found user $uid in local cache.');
+      // Optionally fetch from server in background to update cache
+      _fetchAndCacheUser(uid); 
+      return localUser;
+    }
+
+    return await _fetchAndCacheUser(uid);
+  }
+
+  Future<model.User?> _fetchAndCacheUser(String uid) async {
+    print('UserRepository: Fetching user with ID from Supabase: $uid');
+    
+    // Don't even try if we know we are offline
+    if (!_supabase.realtime.isConnected) {
+      print('UserRepository: Offline, skipping fetch for user $uid');
+      return null;
+    }
+
     try {
       final data = await _supabase
           .from('profiles')
           .select()
           .eq('id', uid)
-          .maybeSingle();
+          .maybeSingle()
+          .timeout(const Duration(seconds: 5));
       
       if (data != null) {
-        print('UserRepository: User $uid found.');
-        return model.User.fromMap(data);
-      } else {
-        print('UserRepository: User $uid not found.');
-        return null;
+        final user = model.User.fromMap(data);
+        await _dbService.saveUser(user); // Cache it
+        return user;
       }
+      return null;
     } catch (e) {
-      print('UserRepository: Error fetching user $uid: $e');
+      print('UserRepository: Error fetching user $uid from Supabase: $e');
       return null;
     }
   }

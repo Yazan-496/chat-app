@@ -68,4 +68,14 @@ class LocalStorageService {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('language_code');
   }
+
+  Future<void> saveSession(String sessionJson) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('supabase_session', sessionJson);
+  }
+
+  Future<String?> getSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('supabase_session');
+  }
 }

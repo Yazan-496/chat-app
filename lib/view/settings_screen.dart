@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/presenter/settings_presenter.dart';
 import 'package:my_chat_app/utils/app_theme.dart';
@@ -24,7 +25,7 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> implements SettingsView {
+class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObserver implements SettingsView {
   late SettingsPresenter _presenter;
   final SupabaseClient _supabase = Supabase.instance.client;
   final LocalStorageService _localStorageService = LocalStorageService();
@@ -33,14 +34,45 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
   String _selectedLanguageCode = 'en';
   Color _currentAvatarColor = Colors.blue.shade300;
   bool _isLoading = false;
+  bool _bubblesEnabled = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _presenter = SettingsPresenter(this);
     _presenter.loadSettings();
     _loadAvatarColor();
     _loadLanguageCode();
+    _checkBubbleStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Small delay to ensure Android settings have propagated
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _checkBubbleStatus();
+      });
+    }
+  }
+
+  Future<void> _checkBubbleStatus() async {
+    if (Platform.isAndroid) {
+      // Use the new isAppBubbleAllowed for a more accurate switch state
+      final enabled = await NotificationService.isAppBubbleAllowed();
+      if (mounted) {
+        setState(() {
+          _bubblesEnabled = enabled;
+        });
+      }
+    }
   }
 
   Future<void> _loadLanguageCode() async {
@@ -257,6 +289,24 @@ class _SettingsScreenState extends State<SettingsScreen> implements SettingsView
                         ),
                       ),
                       const SizedBox(height: 12),
+                      if (Platform.isAndroid) ...[
+                        _buildSettingItem(
+                          title: 'Bubbles',
+                          subtitle: _bubblesEnabled ? 'Enabled' : 'Disabled',
+                          icon: Icons.bubble_chart,
+                          trailing: Switch(
+                            value: _bubblesEnabled,
+                            onChanged: (value) {
+                              NotificationService.openBubbleSettings();
+                            },
+                            activeColor: Colors.blueAccent,
+                          ),
+                          onTap: () {
+                             NotificationService.openBubbleSettings();
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                       _buildSettingItem(
                         title: 'Notification Sound',
                         subtitle: _presenter.notificationSoundPath != null

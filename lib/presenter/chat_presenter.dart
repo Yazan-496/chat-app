@@ -46,6 +46,8 @@ class ChatPresenter {
   StreamSubscription? _otherUserStatusSubscription;
   bool _otherUserInChat = false;
   bool _otherUserInChatPrev = false;
+  bool _isLoadingOlder = false;
+  bool _hasMoreOlder = true;
 
   ChatPresenter(this._view, this._chat)
       : _chatRepository = ChatRepository(),
@@ -480,6 +482,51 @@ class ChatPresenter {
       _view.showMessage('Chat deleted successfully.');
     } catch (e) {
       _view.showMessage('Failed to delete chat: $e');
+    }
+  }
+
+  /// Loads older messages for pagination.
+  Future<void> loadOlderMessages() async {
+    if (_isLoadingOlder || !_hasMoreOlder) return;
+
+    _isLoadingOlder = true;
+    _view.updateView();
+
+    try {
+      final olderMessages = await _chatRepository.loadOlderMessages(_chat.id, _messages.length);
+      
+      if (olderMessages.isEmpty) {
+        _hasMoreOlder = false;
+      } else {
+        // Decrypt messages if needed
+        final decryptedOlder = olderMessages.map((message) {
+          if (message.type == MessageType.text) {
+            try {
+              final decryptedContent = _encryptionService.decryptText(message.content);
+              String? decryptedEditedContent;
+              if (message.editedContent != null) {
+                decryptedEditedContent = _encryptionService.decryptText(message.editedContent!);
+              }
+              return message.copyWith(
+                content: decryptedContent,
+                editedContent: decryptedEditedContent,
+              );
+            } catch (e) {
+              return message.copyWith(content: 'Decryption Error');
+            }
+          }
+          return message;
+        }).toList();
+
+        // Add to existing messages and update view
+        _messages.addAll(decryptedOlder);
+        _updateViewWithCombinedMessages();
+      }
+    } catch (e) {
+      print('ChatPresenter: Error loading older messages: $e');
+    } finally {
+      _isLoadingOlder = false;
+      _view.updateView();
     }
   }
 

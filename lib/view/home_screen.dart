@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/main.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -21,7 +22,6 @@ import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
 import 'package:my_chat_app/view/relationship_selection_dialog.dart';
 import 'package:my_chat_app/notification_service.dart';
-import 'package:my_chat_app/services/bubble_service.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/model/user.dart' as app_user;
@@ -51,7 +51,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   bool _isDiscoveryLoading = false;
   app_user.User? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
-  StreamSubscription<String>? _bubbleNavigationSubscription;
   RealtimeChannel? _statusChannel;
   String? _initialChatId;
   Timer? _statusUpdateTimer;
@@ -84,6 +83,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               _isConnected = true;
               _showRestoredMessage = true;
             });
+            
+            // Sync pending messages that were sent while offline
+            _presenter?.syncPendingMessages();
+
             _restoredMessageTimer?.cancel();
             _restoredMessageTimer = Timer(const Duration(seconds: 3), () {
               if (mounted) {
@@ -108,14 +111,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
     // Listen for notification taps while the app is in foreground
     _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
-      NotificationService.setPendingNavigationChatId(chatId);
-      _checkAndNavigate();
-    });
-
-    // Listen for bubble taps while the app is in foreground
-    _bubbleNavigationSubscription = BubbleService.navigationStream.listen((chatId) {
-      NotificationService.setPendingNavigationChatId(chatId);
-      _checkAndNavigate();
+      // Only set pending ID and navigate if we are NOT already on the home screen
+      // or if the chat ID is different from what we might be viewing.
+      // But wait! This is HomeScreen. If we are here, we are on the list.
+      // So we should just navigate.
+      
+      // Prevent infinite loops if the stream emits repeatedly for the same ID
+      // by checking if we are already navigating or if it's a stale event?
+      // Actually, setPendingNavigationChatId might be re-triggering this.
+      
+      // Let's consume it immediately to prevent re-reads
+      if (NotificationService.consumePendingNavigationChatId() == chatId) {
+         _checkAndNavigateWithId(chatId);
+      }
     });
 
     // Periodic timer to refresh "last seen" labels (e.g., from "1s ago" to "2s ago")
@@ -131,7 +139,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   @override
   void dispose() {
     _navigationSubscription?.cancel();
-    _bubbleNavigationSubscription?.cancel();
     if (_statusChannel != null) {
       _supabase.removeChannel(_statusChannel!);
     }
@@ -263,8 +270,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                      _consumeInitialChatId() ?? 
                      NotificationService.consumePendingNavigationChatId();
     
-    if (pendingId == null) return;
+    if (pendingId != null) {
+      _checkAndNavigateWithId(pendingId);
+    }
+  }
 
+  Future<void> _checkAndNavigateWithId(String pendingId) async {
     debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
     
     Chat? target;
@@ -633,7 +644,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ? Color(_currentUserProfile!.avatarColor!) 
                       : Colors.grey,
                   backgroundImage: _currentUserProfile?.profilePictureUrl != null
-                      ? NetworkImage(_currentUserProfile!.profilePictureUrl!)
+                      ? CachedNetworkImageProvider(_currentUserProfile!.profilePictureUrl!)
                       : null,
                   child: _currentUserProfile?.profilePictureUrl == null
                       ? Text(
@@ -730,7 +741,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
           ...discoveryResults.map((user) => ListTile(
             leading: CircleAvatar(
               backgroundColor: user.avatarColor != null ? Color(user.avatarColor!) : Colors.blue.shade300,
-              backgroundImage: user.profilePictureUrl != null ? NetworkImage(user.profilePictureUrl!) : null,
+              backgroundImage: user.profilePictureUrl != null ? CachedNetworkImageProvider(user.profilePictureUrl!) : null,
               child: user.profilePictureUrl == null ? Text(user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '') : null,
             ),
             title: Text(user.displayName, style: const TextStyle(color: Colors.white)),
@@ -779,7 +790,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         ? Color(chat.avatarColor!) 
                         : Colors.blue.shade300,
                     backgroundImage: chat.profilePictureUrl != null
-                        ? NetworkImage(chat.profilePictureUrl!)
+                        ? CachedNetworkImageProvider(chat.profilePictureUrl!)
                         : null,
                     child: chat.profilePictureUrl == null
                         ? Text(
@@ -867,7 +878,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ? Color(chat.avatarColor!) 
                       : Colors.blue.shade300,
                   backgroundImage: chat.profilePictureUrl != null
-                      ? NetworkImage(chat.profilePictureUrl!)
+                      ? CachedNetworkImageProvider(chat.profilePictureUrl!)
                       : null,
                   child: chat.profilePictureUrl == null
                       ? Text(
@@ -944,7 +955,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Expanded(
+                      Flexible(
                         child: Text(
                           (() {
                               String displayContent;
@@ -991,17 +1002,27 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                            fontWeight: chat.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
                          ),
                       ),
+                    
                     ],
                   ),
                 ],
               ),
             ),
-            // Read Status Indicator (Optional)
-            if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
-              (chat.lastMessageStatus == MessageStatus.read
-                  ? _buildReadReceiptAvatar(chat)
-                  : _buildMessageStatusIcon(chat.lastMessageStatus, chat)),
-            
+              // Push status indicator to the far right
+                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                        // const Spacer(),
+                        // const Spacer(),
+                      // Status indicator in the same row as message and time with constant width
+                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                        SizedBox(
+                          width: 55,
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: chat.lastMessageStatus == MessageStatus.read
+                                ? _buildReadReceiptAvatar(chat)
+                                : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
+                          ),
+                        ),
             // Unread count badge for incoming messages
             if (chat.unreadCount > 0)
               Container(
@@ -1099,15 +1120,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                 title: const Text('Show as Bubble', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   Navigator.pop(context);
-                  await BubbleService.instance.start(
-                    chatId: chat.id,
-                    title: chat.displayName,
-                    body: 'Tap to chat',
-                  );
-                  try {
-                    const platform = MethodChannel('com.example.my_chat_app/bubbles');
-                    await platform.invokeMethod('moveTaskToBack');
-                  } catch (_) {}
+                  await NotificationService.showBubbleForChat(chat);
                 },
               ),
               ListTile(
@@ -1128,58 +1141,61 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   Widget _buildMessageStatusIcon(MessageStatus? status, Chat chat) {
     if (status == null) return const SizedBox.shrink();
 
-    IconData iconData;
-    Color iconColor = chat.relationshipType.textColor.withOpacity(0.7); // Use chat's text color for consistency
+    if (status == MessageStatus.read) {
+      return _buildReadReceiptAvatar(chat);
+    }
+
+    String statusText;
+    Color textColor = Colors.grey;
 
     switch (status) {
       case MessageStatus.sending:
-        iconData = Icons.access_time; // Clock icon for sending
+        statusText = 'sending';
         break;
       case MessageStatus.sent:
-        iconData = Icons.check; // Single check for sent
+        statusText = 'sent';
         break;
       case MessageStatus.delivered:
-        iconData = Icons.done_all; // Double check for delivered
+        statusText = 'delivered';
         break;
-      case MessageStatus.read:
-        iconData = Icons.done_all; // Double check for read
-        iconColor = chat.relationshipType.primaryColor; // Use chat's primary color for read
-        break;
+      default:
+        return const SizedBox.shrink();
     }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4.0),
-      child: Icon(
-        iconData,
-        size: 14,
-        color: iconColor,
+      child: Text(
+        statusText,
+        style: TextStyle(
+          fontSize: 10,
+          color: textColor,
+          fontStyle: FontStyle.italic,
+        ),
       ),
     );
   }
 
   Widget _buildReadReceiptAvatar(Chat chat) {
     return Padding(
-      padding: const EdgeInsets.only(left: 4.0, right: 6.0),
-      child: Container(
-        width: 20,
-        height: 20,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white24, width: 2),
-        ),
-        child: CircleAvatar(
-          radius: 10,
-          backgroundImage: chat.profilePictureUrl != null
-              ? NetworkImage(chat.profilePictureUrl!)
-              : null,
-          backgroundColor: Colors.grey.shade700,
-          child: chat.profilePictureUrl == null
-              ? Text(
-                  chat.displayName.isNotEmpty ? chat.displayName[0] : '?',
-                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                )
-              : null,
-        ),
+      padding: const EdgeInsets.only(left: 1.0),
+      child: CircleAvatar(
+        radius: 10,
+        backgroundColor: chat.avatarColor != null 
+            ? Color(chat.avatarColor!) 
+            : Colors.blue.shade300,
+        backgroundImage: chat.profilePictureUrl != null
+            ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+            : null,
+        child: chat.profilePictureUrl == null
+            ? Text(
+                chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                style: const TextStyle(
+                  color: Colors.white, 
+                  fontWeight: FontWeight.bold, 
+                  fontSize: 8,
+                ),
+              )
+            : null,
       ),
     );
   }

@@ -1,6 +1,17 @@
+import 'package:isar/isar.dart';
+
+part 'user.g.dart';
+
+@collection
 class User {
+  Id get isarId => fastHash(uid);
+
+  @Index(unique: true, replace: true)
   final String uid;
+  
+  @ignore
   String get id => uid;
+  
   final String username;
   String displayName;
   String? profilePictureUrl;
@@ -19,6 +30,17 @@ class User {
     this.activeChatId,
     this.avatarColor,
   });
+
+  static int fastHash(String string) {
+    var hash = 0xcbf29ce484222325;
+    var i = 0;
+    while (i < string.length) {
+      var codeUnit = string.codeUnitAt(i++);
+      hash ^= codeUnit;
+      hash *= 0x100000001b3;
+    }
+    return hash;
+  }
 
   bool get isActuallyOnline {
     return isOnline;

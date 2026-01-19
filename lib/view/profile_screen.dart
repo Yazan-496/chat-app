@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/model/user.dart' as app_user;
 import 'package:my_chat_app/presenter/profile_presenter.dart';
 import 'package:my_chat_app/view/profile_view.dart';
@@ -292,7 +293,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                                 ? Color(_userProfile!.avatarColor!) 
                                                 : Colors.blue.shade300,
                                             backgroundImage: _userProfile?.profilePictureUrl != null
-                                                ? NetworkImage(_userProfile!.profilePictureUrl!)
+                                                ? CachedNetworkImageProvider(_userProfile!.profilePictureUrl!)
                                                 : null,
                                             child: _userProfile?.profilePictureUrl == null
                                                 ? Text(

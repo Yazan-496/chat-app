@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
@@ -72,7 +73,7 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                       ? Color(chat.avatarColor!)
                       : Colors.blue.shade300,
                   backgroundImage: chat.profilePictureUrl != null
-                      ? NetworkImage(chat.profilePictureUrl!)
+                      ? CachedNetworkImageProvider(chat.profilePictureUrl!)
                       : null,
                   child: chat.profilePictureUrl == null
                       ? Text(

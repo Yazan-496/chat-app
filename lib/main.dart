@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/view/home_screen.dart';
@@ -11,18 +12,54 @@ import 'package:my_chat_app/view/splash_screen.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
-import 'package:flutter/services.dart';
+import 'package:my_chat_app/services/database_service.dart';
 import 'package:my_chat_app/supabase_client.dart';
+import 'package:my_chat_app/services/background_service.dart' as shim;
+import 'package:flutter_background_service/flutter_background_service.dart';
+
+import 'package:my_chat_app/services/local_storage_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+Future<void> initializeBackgroundService() async {
+  final service = FlutterBackgroundService();
+  await service.configure(
+    androidConfiguration: AndroidConfiguration(
+      onStart: shim.onStart,
+      autoStart: true,
+      isForegroundMode: true, // Required to keep service alive
+      notificationChannelId: 'my_chat_app_background',
+      foregroundServiceNotificationId: 888,
+    ),
+    iosConfiguration: IosConfiguration(
+      autoStart: true,
+      onForeground: shim.onStart,
+      onBackground: (ServiceInstance service) {
+          return true;
+      }, 
+    ),
+  );
+  
+  await service.startService();
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  final void Function(ServiceInstance) _ = shim.onStart;
+
   await SupabaseManager.initialize();
+  await DatabaseService.initialize();
   
   // Initialize notification service
   await NotificationService.initNotifications();
+  final notificationsGranted =
+      await NotificationService.ensureAndroidNotificationsPermission();
+  
+  // Initialize background service
+  if (notificationsGranted) {
+    await initializeBackgroundService();
+  }
   
   runApp(const MainApp());
 }
@@ -70,6 +107,11 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     // Listen to auth state changes to start/stop global listener
     _authStateSubscription = _supabase.auth.onAuthStateChange.listen((data) async {
       final user = data.session?.user;
+      if (data.session != null) {
+        // Persist session for background service
+        await LocalStorageService().saveSession(jsonEncode(data.session!.toJson()));
+      }
+      
       if (user != null) {
         await NotificationService.startGlobalMessageListener(user.id);
         _presenceService.setUserOnline(user.id);
@@ -95,9 +137,19 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     if (state == AppLifecycleState.resumed) {
       _presenceService.setUserOnline(user.id);
       NotificationService.startGlobalMessageListener(user.id);
+      
+      // Tell background service we are in foreground, so it can stop listening
+      FlutterBackgroundService().invoke('app_in_foreground');
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
-      // Scenario 1: Graceful Exit - Set offline when app is minimized, backgrounded, or killed
-      _presenceService.setUserOffline(user.id);
+      if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+        _presenceService.setUserOffline(user.id);
+        NotificationService.stopGlobalMessageListener();
+        
+        // Tell background service we are in background, so it can start listening
+        FlutterBackgroundService().invoke('app_in_background', {
+          'user_id': user.id,
+        });
+      }
     }
   }
 
