@@ -47,6 +47,7 @@ CREATE INDEX IF NOT EXISTS idx_chats_participant_ids ON chats USING GIN(particip
 -- ============================================
 CREATE TABLE IF NOT EXISTS messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  local_id TEXT,
   chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   sender_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   receiver_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -69,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
 CREATE INDEX IF NOT EXISTS idx_messages_receiver_id ON messages(receiver_id);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_local_id ON messages(local_id);
 
 -- ============================================
 -- 4. RELATIONSHIPS TABLE
@@ -326,6 +328,35 @@ CREATE POLICY "Users can delete files"
   TO authenticated 
   USING (bucket_id = 'chat_media');
 
+-- 1) Trigger function: mark older messages as read when a message is marked read
+CREATE OR REPLACE FUNCTION mark_older_messages_read()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  -- Only run on UPDATE
+  IF (TG_OP = 'UPDATE') THEN
+    -- Ensure the is_read column exists and transitioned to true
+    IF (NEW.is_read IS DISTINCT FROM OLD.is_read) AND (NEW.is_read = true) THEN
+      UPDATE messages
+      SET is_read = true
+      WHERE chat_id = NEW.chat_id
+        AND created_at <= COALESCE(NEW.created_at, NEW.timestamp)
+        AND is_read = false;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+-- 2) Trigger: call function after each row update
+DROP TRIGGER IF EXISTS trigger_mark_older_messages_read ON messages;
+
+CREATE TRIGGER trigger_mark_older_messages_read
+AFTER UPDATE ON messages
+FOR EACH ROW
+EXECUTE FUNCTION mark_older_messages_read();
 -- ============================================
 -- GRANT PERMISSIONS (if needed)
 -- ============================================
