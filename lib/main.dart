@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/view/home_screen.dart';
@@ -15,6 +16,8 @@ import 'package:my_chat_app/services/database_service.dart';
 import 'package:my_chat_app/supabase_client.dart';
 import 'package:my_chat_app/services/background_service.dart' as shim;
 import 'package:flutter_background_service/flutter_background_service.dart';
+
+import 'package:my_chat_app/services/local_storage_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -104,6 +107,11 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
     // Listen to auth state changes to start/stop global listener
     _authStateSubscription = _supabase.auth.onAuthStateChange.listen((data) async {
       final user = data.session?.user;
+      if (data.session != null) {
+        // Persist session for background service
+        await LocalStorageService().saveSession(jsonEncode(data.session!.toJson()));
+      }
+      
       if (user != null) {
         await NotificationService.startGlobalMessageListener(user.id);
         _presenceService.setUserOnline(user.id);
@@ -138,7 +146,9 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
         NotificationService.stopGlobalMessageListener();
         
         // Tell background service we are in background, so it can start listening
-        FlutterBackgroundService().invoke('app_in_background');
+        FlutterBackgroundService().invoke('app_in_background', {
+          'user_id': user.id,
+        });
       }
     }
   }

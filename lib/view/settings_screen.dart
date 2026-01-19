@@ -56,7 +56,10 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _checkBubbleStatus();
+      // Small delay to ensure Android settings have propagated
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _checkBubbleStatus();
+      });
     }
   }
 

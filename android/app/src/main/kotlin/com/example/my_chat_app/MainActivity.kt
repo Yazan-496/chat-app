@@ -102,6 +102,21 @@ open class MainActivity : FlutterActivity() {
         manager.createNotificationChannel(channel)
     }
 
+    private fun isAppBubbleAllowed(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        val manager = getSystemService<NotificationManager>() ?: return false
+        
+        // On Android 11 (R) and above, areBubblesAllowed() checks the app-level permission.
+        // It returns true if "All conversations can bubble" or "Selected conversations can bubble".
+        // It returns false ONLY if "Nothing can bubble".
+        val allowed = try { manager.areBubblesAllowed() } catch (_: Exception) { false }
+        
+        // Log for debugging
+        Log.d("LoZoBubble", "isAppBubbleAllowed: $allowed (SDK ${Build.VERSION.SDK_INT})")
+        
+        return allowed
+    }
+
     private fun canShowBubbles(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         ensureMessagesChannel()
@@ -174,6 +189,10 @@ open class MainActivity : FlutterActivity() {
         return try {
             val original = BitmapFactory.decodeFile(path) ?: return null
             val size = original.width.coerceAtMost(original.height)
+            // Create a larger canvas to allow padding (zooming out the avatar)
+            // Adaptive icons viewport is 72dp inside 108dp canvas.
+            // If we fill the canvas, it looks "zoomed in".
+            // We scale it down slightly to fit the face better in the circle.
             val opaque = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(opaque)
             canvas.drawColor(android.graphics.Color.WHITE) // Background
@@ -186,7 +205,11 @@ open class MainActivity : FlutterActivity() {
                  val top = (original.height - original.width) / 2
                  srcRect = Rect(0, top, original.width, top + original.width)
             }
-            val dstRect = Rect(0, 0, size, size)
+            
+            // Draw with 10% padding (zoom out)
+            val padding = (size * 0.1f).toInt()
+            val dstRect = Rect(padding, padding, size - padding, size - padding)
+            
             canvas.drawBitmap(original, srcRect, dstRect, null)
             
             IconCompat.createWithAdaptiveBitmap(opaque)
