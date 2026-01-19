@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class PresenceService {
@@ -59,24 +60,28 @@ class PresenceService {
   Future<void> _sendOnlineStatus() async {
   if (_currentUserId == null) return;
   try {
-    print('PresenceService: Sending heartbeat for user $_currentUserId');
+    log('PresenceService: Sending heartbeat for user $_currentUserId');
     await _supabase.rpc('handle_user_status', params: {
       'p_user_id': _currentUserId,      
       'p_online_status': true,         
     });
   } catch (e) {
-    print('PresenceService: Error sending heartbeat: $e');
+    log('PresenceService: Error sending heartbeat: $e');
   }
 }
   /// Helper for compatibility with old code
   Future<void> setUserOnline(String uid) async {
-    print('PresenceService: Manually setting user online: $uid');
+    log('PresenceService: Manually setting user online: $uid');
     setUserStatus(uid);
   }
 
   /// Helper for compatibility with old code
   Future<void> setUserOffline(String uid) async {
-    print('PresenceService: Manually setting user offline: $uid');
+    log('PresenceService: Manually setting user offline: $uid');
+    if (uid.isEmpty) {
+      dispose();
+      return;
+    }
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     
@@ -86,7 +91,7 @@ class PresenceService {
         'p_online_status': false,
       });
     } catch (e) {
-      print('PresenceService: Error setting offline status: $e');
+      log('PresenceService: Error setting offline status: $e');
     }
     
     dispose();

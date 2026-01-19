@@ -85,7 +85,7 @@ class _ChatInputAreaState extends State<ChatInputArea> {
           if (widget.replyingTo != null) widget.buildActiveReplyPreview(widget.replyingTo!),
           if (widget.editingMessage != null) widget.buildActiveEditIndicator(widget.editingMessage!),
           Container(
-            padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 8),
+            padding: const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 15),
             decoration: BoxDecoration(
               color: Colors.grey.shade900,
               boxShadow: [

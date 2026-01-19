@@ -56,7 +56,11 @@ class HomePresenter {
       },
       onError: (error) {
         print('HomePresenter: Error loading chats: $error');
-        _view.displayChats([]);
+        // Only clear chats if we don't have any yet (initial load failure)
+        // If we have local chats, keep them.
+        if (_chats.isEmpty) {
+          _view.displayChats([]);
+        }
         if (showLoading) {
           _view.hideLoading();
         }
@@ -69,16 +73,23 @@ class HomePresenter {
     if (user == null) return;
 
     try {
-      // 1. Force a manual fetch of chats
+      // 1. Sync any pending messages sent while offline
+      await _chatRepository.syncPendingMessages();
+
+      // 2. Force a manual fetch of chats
       final chatsData = await _chatRepository.fetchChatsForUser(user.id);
       _chats = chatsData;
       _view.displayChats(_chats);
 
-      // 2. Restart subscriptions without showing full loading state
+      // 3. Restart subscriptions without showing full loading state
       loadChats(showLoading: false);
     } catch (e) {
       print('HomePresenter: Error refreshing chats: $e');
     }
+  }
+
+  Future<void> syncPendingMessages() async {
+    await _chatRepository.syncPendingMessages();
   }
 
   void dispose() {

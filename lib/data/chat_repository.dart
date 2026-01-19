@@ -7,6 +7,8 @@ import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/model/message.dart';
 import 'package:collection/collection.dart';
 import 'package:my_chat_app/notification_service.dart';
+import 'package:my_chat_app/services/database_service.dart';
+import 'dart:async';
 import 'dart:convert';
 
 /// Repository for managing chat and message data in Supabase.
@@ -14,70 +16,121 @@ import 'dart:convert';
 class ChatRepository {
   final SupabaseClient _supabase = Supabase.instance.client;
   final UserRepository _userRepository = UserRepository();
+  final DatabaseService _dbService = DatabaseService();
   final _uuid = const Uuid();
   static const _chatNamespace = '6ba7b810-9dad-11d1-80b4-00c04fd430c8'; // Random UUID as namespace
 
-  /// Retrieves a single chat by its ID.
+  // Stream controller to manage combined local and remote messages
+  final Map<String, StreamController<List<Message>>> _messageControllers = {};
+  final Map<String, StreamSubscription> _messageSubscriptions = {};
+  final Map<String, int> _messageLimits = {};
+  
+  // Stream controller for chats to support local updates (optimistic UI)
+  StreamController<List<Chat>>? _chatsController;
+  StreamSubscription? _supabaseChatsSubscription;
+
+  /// Fetches a specific chat by its ID.
   Future<Chat?> getChatById(String chatId) async {
-    final data = await _supabase
-        .from('chats')
-        .select()
-        .eq('id', chatId)
-        .maybeSingle();
+    // Try local first
+    final localChat = await _dbService.getChat(chatId);
+    if (localChat != null) return localChat;
+
+    final response = await _supabase.from('chats').select().eq('id', chatId).maybeSingle();
+    if (response == null) return null;
     
-    if (data != null) {
-      final chat = Chat.fromMap(data);
-      final currentUserId = _supabase.auth.currentUser?.id;
-      if (currentUserId != null) {
-        final otherParticipantId = chat.participantIds.firstWhereOrNull((id) => id != currentUserId);
-        if (otherParticipantId != null) {
-          final otherUser = await _userRepository.getUser(otherParticipantId);
-          if (otherUser != null) {
-            return chat.copyWith(
-              displayName: otherUser.displayName,
-              profilePictureUrl: otherUser.profilePictureUrl,
-              avatarColor: otherUser.avatarColor,
-              isOnline: otherUser.isOnline,
-              lastSeen: otherUser.lastSeen,
-            );
-          }
-        }
-      }
-      return chat;
-    } else {
-      return null;
+    // We need current user ID for _processChatsData
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId == null) return null;
+
+    final processed = await _processChatsData([response], userId);
+    if (processed.isNotEmpty) {
+      await _dbService.saveChats([processed.first]);
+      return processed.first;
     }
+    return null;
   }
 
   /// Retrieves a stream of chats for a given user.
-  /// Chats are ordered by the last message time, with the most recent first.
+  /// Offline-First: Emits local data first, then listens to Supabase for updates.
   Stream<List<Chat>> getChatsForUser(String userId) {
-    return _supabase
+    if (_chatsController != null) {
+      // If already active, just return the stream
+      // We also trigger a local refresh to be sure
+      _refreshLocalChats(userId);
+      return _chatsController!.stream;
+    }
+
+    _chatsController = StreamController<List<Chat>>.broadcast(
+      onCancel: () {
+        _supabaseChatsSubscription?.cancel();
+        _supabaseChatsSubscription = null;
+        _chatsController?.close();
+        _chatsController = null;
+      },
+    );
+
+    // 1. Load from local database immediately and emit
+    _refreshLocalChats(userId);
+
+    // 2. Setup Supabase stream
+    _supabaseChatsSubscription = _supabase
         .from('chats')
         .stream(primaryKey: ['id'])
         .order('last_message_time', ascending: false)
         .asyncMap((data) async {
-          return _processChatsData(data, userId);
+          final processed = await _processChatsData(data, userId);
+          // Save to local DB for offline access
+          await _dbService.saveChats(processed);
+          return processed;
         })
-        .handleError((error) {
-          print('ChatRepository: Stream error in getChatsForUser: $error');
-          return <Chat>[]; // Return empty list on error
-        });
+        .listen(
+          (processedChats) {
+            if (_chatsController != null && !_chatsController!.isClosed) {
+              _chatsController!.add(processedChats);
+            }
+          },
+          onError: (error) {
+            print('ChatRepository: Supabase stream error (likely offline): $error');
+            // We don't close the controller here so it stays alive with local data
+          },
+        );
+
+    return _chatsController!.stream;
+  }
+
+  /// Refreshes the chats from the local database and emits them to the stream.
+  Future<void> _refreshLocalChats(String userId) async {
+    final localChats = await _dbService.getAllChats();
+    final filtered = localChats.where((c) => c.participantIds.contains(userId)).toList();
+    if (_chatsController != null && !_chatsController!.isClosed) {
+      _chatsController!.add(filtered);
+    }
   }
 
   /// Fetches chats for a user manually (one-time fetch).
   Future<List<Chat>> fetchChatsForUser(String userId) async {
+    if (!_supabase.realtime.isConnected) {
+      throw Exception('Offline: Cannot fetch chats from server');
+    }
+
     final data = await _supabase
         .from('chats')
         .select()
-        .order('last_message_time', ascending: false);
-    return _processChatsData(data, userId);
+        .order('last_message_time', ascending: false)
+        .timeout(const Duration(seconds: 10));
+    final processed = await _processChatsData(data, userId);
+    await _dbService.saveChats(processed);
+    return processed;
   }
 
   /// Common logic to process raw chat data into Chat models.
   Future<List<Chat>> _processChatsData(List<Map<String, dynamic>> data, String userId) async {
     print('ChatRepository: Processing ${data.length} chat documents.');
     List<Chat> chats = [];
+    
+    // Check if we are likely offline to avoid hanging on Supabase calls
+    final bool isOffline = !_supabase.realtime.isConnected;
+
     for (var chatData in data) {
       final participantIds = List<String>.from(chatData['participant_ids'] ?? []);
       if (!participantIds.contains(userId)) continue;
@@ -89,36 +142,54 @@ class ChatRepository {
         continue;
       }
 
-      final otherUser = await _userRepository.getUser(otherParticipantId);
+      // Try local user first to avoid hanging offline
+      var otherUser = await _userRepository.getUser(otherParticipantId);
 
-      if (otherUser != null) {
-        // Fetch unread messages count for this chat
-        final unreadRes = await _supabase
-            .from('messages')
-            .select('id')
-            .eq('chat_id', chatData['id'])
-            .eq('receiver_id', userId)
-            .neq('status', 'read');
-        
-        final unreadCount = unreadRes.length;
-
-        chats.add(Chat(
-          id: chatData['id'],
-          participantIds: participantIds,
-          displayName: otherUser.displayName,
-          profilePictureUrl: otherUser.profilePictureUrl,
-          avatarColor: otherUser.avatarColor,
-          relationshipType: RelationshipType.values.firstWhereOrNull(
-              (e) => e.toString() == 'RelationshipType.' + (chatData['relationship_type'] ?? 'friend').toString()) ?? RelationshipType.friend,
-      lastMessageTime: chatData['last_message_time'] != null 
-          ? DateTime.tryParse(chatData['last_message_time'].toString())?.toUtc() ?? DateTime.now().toUtc() 
-          : DateTime.now().toUtc(),
-          lastMessageContent: chatData['last_message_content'] as String?,
-          unreadCount: unreadCount,
-          isOnline: otherUser.isOnline,
-          lastSeen: otherUser.lastSeen,
-        ));
+      // Fetch unread messages count
+      int unreadCount = 0;
+      
+      if (!isOffline) {
+        try {
+          final unreadRes = await _supabase
+              .from('messages')
+              .select('id')
+              .eq('chat_id', chatData['id'])
+              .eq('receiver_id', userId)
+              .neq('status', 'read')
+              .timeout(const Duration(seconds: 2));
+          
+          unreadCount = unreadRes.length;
+        } catch (e) {
+          print('ChatRepository: Error fetching unread count from Supabase, falling back to local: $e');
+          unreadCount = await _dbService.getUnreadCount(chatData['id'], userId);
+        }
+      } else {
+        // Offline, use local unread count
+        unreadCount = await _dbService.getUnreadCount(chatData['id'], userId);
       }
+
+      chats.add(Chat(
+        id: chatData['id'],
+        participantIds: participantIds,
+        displayName: otherUser?.displayName ?? 'User ${otherParticipantId.substring(0, 5)}',
+        profilePictureUrl: otherUser?.profilePictureUrl,
+        avatarColor: otherUser?.avatarColor,
+        relationshipType: RelationshipType.values.firstWhereOrNull(
+            (e) => e.toString() == 'RelationshipType.' + (chatData['relationship_type'] ?? 'friend').toString()) ?? RelationshipType.friend,
+        lastMessageTime: chatData['last_message_time'] != null 
+            ? DateTime.tryParse(chatData['last_message_time'].toString())?.toUtc() ?? DateTime.now().toUtc() 
+            : DateTime.now().toUtc(),
+        lastMessageContent: chatData['last_message_content'] as String?,
+        lastMessageSenderId: chatData['last_message_sender_id'] as String?,
+        lastMessageStatus: chatData['last_message_status'] != null
+            ? MessageStatus.values.firstWhere(
+                (e) => e.toString().split('.').last == chatData['last_message_status'].toString(),
+                orElse: () => MessageStatus.sent)
+            : MessageStatus.sent,
+        unreadCount: unreadCount,
+        isOnline: otherUser?.isOnline ?? false,
+        lastSeen: otherUser?.lastSeen,
+      ));
     }
     return chats;
   }
@@ -162,28 +233,104 @@ class ChatRepository {
     );
 
     await _supabase.from('chats').insert(newChat.toMap());
+    await _dbService.saveChats([newChat]);
     return newChat;
   }
 
   /// Sends a new message to a chat.
+  /// Offline-First: Saves to local DB immediately (Optimistic UI), then uploads to Supabase.
   Future<String?> sendMessage(Message message) async {
     try {
+      // 1. Save to local database immediately with 'sending' status
+      await _dbService.saveMessages([message]);
+      
+      // Update the local stream if it exists
+      if (_messageControllers.containsKey(message.chatId)) {
+        final limit = _messageLimits[message.chatId] ?? 100;
+        final localMessages = await _dbService.getMessages(message.chatId, limit: limit);
+        _messageControllers[message.chatId]!.add(localMessages);
+      }
+
+      // Update local chat last message immediately (Optimistic Chat List)
+      final localChat = await _dbService.getChat(message.chatId);
+      if (localChat != null) {
+        final updatedChat = localChat.copyWith(
+          lastMessageTime: message.timestamp,
+          lastMessageContent: message.type == MessageType.text ? message.content : '[${message.type.name} message]',
+          lastMessageSenderId: message.senderId,
+          lastMessageStatus: MessageStatus.sending,
+        );
+        await _dbService.saveChats([updatedChat]);
+        
+        // Notify chat stream that local data changed
+        final userId = _supabase.auth.currentUser?.id;
+        if (userId != null) {
+          _refreshLocalChats(userId);
+        }
+      }
+
+      // 2. Upload to Supabase
       await _supabase.from('messages').insert(message.toMap());
 
-      // Update status to sent after successful initial write
+      // 3. Update status to 'sent' after successful initial write
       await updateMessageStatus(message.chatId, message.id, MessageStatus.sent);
       
-      // Update last message in chat
+      // 4. Update last message in chat in Supabase
       await _supabase.from('chats').update({
         'last_message_time': DateTime.now().toUtc().toIso8601String(),
         'last_message_content': message.type == MessageType.text ? message.content : '[${message.type.name} message]',
         'last_message_sender_id': message.senderId,
-        'last_message_status': message.status.toString().split('.').last,
+        'last_message_status': MessageStatus.sent.toString().split('.').last,
       }).eq('id', message.chatId);
+
       return null;
     } catch (e) {
       print('ChatRepository: Error sending message: $e');
+      // Status remains 'sending' locally, could implement a retry mechanism here
       return e.toString();
+    }
+  }
+
+  /// Syncs all pending messages (those with 'sending' status) to Supabase.
+  /// This is called when the connection is restored.
+  Future<void> syncPendingMessages() async {
+    if (!_supabase.realtime.isConnected) return;
+
+    print('ChatRepository: Syncing pending messages...');
+    final pendingMessages = await _dbService.getPendingMessages();
+    if (pendingMessages.isEmpty) {
+      print('ChatRepository: No pending messages to sync.');
+      return;
+    }
+
+    print('ChatRepository: Found ${pendingMessages.length} pending messages to sync.');
+    for (var message in pendingMessages) {
+      try {
+        // 1. Upload to Supabase
+        await _supabase.from('messages').insert(message.toMap());
+
+        // 2. Update status to 'sent' in local and remote
+        await updateMessageStatus(message.chatId, message.id, MessageStatus.sent);
+        
+        // 3. Update last message in chat in Supabase if this is the newest
+        await _supabase.from('chats').update({
+          'last_message_time': message.timestamp.toUtc().toIso8601String(),
+          'last_message_content': message.type == MessageType.text ? message.content : '[${message.type.name} message]',
+          'last_message_sender_id': message.senderId,
+          'last_message_status': MessageStatus.sent.toString().split('.').last,
+        }).eq('id', message.chatId);
+        
+        print('ChatRepository: Successfully synced message ${message.id}');
+      } catch (e) {
+        print('ChatRepository: Failed to sync message ${message.id}: $e');
+        // Continue with next message
+      }
+    }
+    
+    // Refresh chats to update statuses in the UI
+    final userId = _supabase.auth.currentUser?.id;
+    if (userId != null) {
+      _refreshLocalChats(userId);
     }
   }
 
@@ -204,38 +351,141 @@ class ChatRepository {
   }
 
   /// Retrieves a stream of messages for a given chat.
+  /// Offline-First: Emits local data immediately, then syncs with Supabase.
   Stream<List<Message>> getChatMessages(String chatId) {
-    return _supabase
+    if (_messageControllers.containsKey(chatId)) {
+      return _messageControllers[chatId]!.stream;
+    }
+
+    final controller = StreamController<List<Message>>.broadcast();
+    _messageControllers[chatId] = controller;
+    _messageLimits[chatId] = 100; // Initial limit
+
+    // 1. Load initial 100 messages from local database
+    _loadInitialLocalMessages(chatId, controller);
+
+    // 2. Setup Supabase stream for real-time updates
+    _setupSupabaseStream(chatId, controller);
+
+    // 3. Perform background sync for missed messages
+    _syncMissedMessages(chatId);
+
+    return controller.stream;
+  }
+
+  Future<void> _loadInitialLocalMessages(String chatId, StreamController<List<Message>> controller) async {
+    final limit = _messageLimits[chatId] ?? 100;
+    final localMessages = await _dbService.getMessages(chatId, limit: limit);
+    if (!controller.isClosed) {
+      controller.add(localMessages);
+    }
+  }
+
+  void _setupSupabaseStream(String chatId, StreamController<List<Message>> controller) {
+    _messageSubscriptions[chatId]?.cancel();
+    _messageSubscriptions[chatId] = _supabase
         .from('messages')
         .stream(primaryKey: ['id'])
         .eq('chat_id', chatId)
         .order('timestamp', ascending: false)
-        .handleError((error) {
-          print('ChatRepository: Stream error: $error');
-        })
-        .map((data) {
-          return data.map((map) {
-            try {
-              return Message.fromMap(map);
-            } catch (e) {
-              print('ChatRepository: Error parsing message: $e');
-              return Message(
-                id: map['id'] ?? 'unknown',
-                chatId: chatId,
-                senderId: 'unknown',
-                receiverId: 'unknown',
-                type: MessageType.text,
-                content: 'Error loading message',
-                timestamp: DateTime.now(),
-                status: MessageStatus.delivered,
-              );
-            }
-          }).toList();
+        .listen((data) async {
+          final messages = data.map((m) => Message.fromMap(m)).toList();
+          // Save all incoming messages to local cache
+          await _dbService.saveMessages(messages);
+          
+          // Re-fetch from local DB to ensure consistent ordering and pagination
+          final limit = _messageLimits[chatId] ?? 100;
+          final updatedLocal = await _dbService.getMessages(chatId, limit: limit);
+          if (!controller.isClosed) {
+            controller.add(updatedLocal);
+          }
+        }, onError: (error) {
+          print('ChatRepository: Supabase stream error for $chatId: $error');
         });
+  }
+
+  Future<void> _syncMissedMessages(String chatId) async {
+    try {
+      final lastLocal = await _dbService.getLastMessage(chatId);
+      final query = _supabase.from('messages').select().eq('chat_id', chatId);
+      
+      if (lastLocal != null) {
+        query.gt('timestamp', lastLocal.timestamp.toUtc().toIso8601String());
+      }
+
+      final data = await query.order('timestamp', ascending: false);
+      if (data.isNotEmpty) {
+        final newMessages = (data as List).map((m) => Message.fromMap(m)).toList();
+        await _dbService.saveMessages(newMessages);
+        print('ChatRepository: Synced ${newMessages.length} new messages for $chatId');
+      }
+    } catch (e) {
+      print('ChatRepository: Background sync failed for $chatId: $e');
+    }
+  }
+
+  /// Loads older messages from local DB for pagination.
+  /// If local data is exhausted, it could optionally fetch from Supabase.
+  Future<List<Message>> loadOlderMessages(String chatId, int currentCount) async {
+    final older = await _dbService.getMessages(chatId, limit: 100, offset: currentCount);
+    
+    // Update the limit for the stream so new messages don't truncate the list
+    _messageLimits[chatId] = currentCount + 100;
+
+    if (older.isEmpty) {
+      // Local exhausted, try fetching from Supabase
+      final lastLocal = await _dbService.getMessages(chatId, limit: 1, offset: currentCount - 1);
+      if (lastLocal.isNotEmpty) {
+        final data = await _supabase
+            .from('messages')
+            .select()
+            .eq('chat_id', chatId)
+            .lt('timestamp', lastLocal.first.timestamp.toUtc().toIso8601String())
+            .order('timestamp', ascending: false)
+            .limit(100);
+        
+        if (data.isNotEmpty) {
+          final fetched = (data as List).map((m) => Message.fromMap(m)).toList();
+          await _dbService.saveMessages(fetched);
+          return fetched;
+        }
+      }
+    }
+    return older;
+  }
+
+  /// Stops the stream for a specific chat.
+  void disposeChatStream(String chatId) {
+    _messageSubscriptions[chatId]?.cancel();
+    _messageSubscriptions.remove(chatId);
+    _messageControllers[chatId]?.close();
+    _messageControllers.remove(chatId);
   }
 
   /// Updates the status of a specific message.
   Future<void> updateMessageStatus(String chatId, String messageId, MessageStatus status) async {
+    // 1. Update local database
+    final localMessage = await _dbService.getMessage(messageId);
+    if (localMessage != null) {
+      localMessage.status = status;
+      await _dbService.saveMessages([localMessage]);
+      
+      // Update local chat last message status if this is the last message
+      final localChat = await _dbService.getChat(chatId);
+      if (localChat != null && localChat.lastMessageTime.isAtSameMomentAs(localMessage.timestamp)) {
+        final updatedChat = localChat.copyWith(lastMessageStatus: status);
+        await _dbService.saveChats([updatedChat]);
+      }
+
+      // Update stream if active
+      if (_messageControllers.containsKey(chatId)) {
+        final limit = _messageLimits[chatId] ?? 100;
+        final updated = await _dbService.getMessages(chatId, limit: limit);
+        _messageControllers[chatId]!.add(updated);
+      }
+    }
+
+    // 2. Update Supabase
     await _supabase
         .from('messages')
         .update({'status': status.toString().split('.').last})
@@ -253,8 +503,29 @@ class ChatRepository {
   Future<void> updateMessagesStatusBatch(String chatId, Map<String, MessageStatus> updates) async {
     if (updates.isEmpty) return;
     
+    // 1. Update local database in batch
+    final messageIds = updates.keys.toList();
+    final localMessages = await _dbService.getMessagesByIds(messageIds);
+    
+    for (var m in localMessages) {
+      if (updates.containsKey(m.id)) {
+        m.status = updates[m.id]!;
+      }
+    }
+    await _dbService.saveMessages(localMessages);
+
+    // Update stream if active
+    if (_messageControllers.containsKey(chatId)) {
+      final updated = await _dbService.getMessages(chatId, limit: 100);
+      _messageControllers[chatId]!.add(updated);
+    }
+
+    // 2. Update Supabase (individually or via RPC if available)
     for (var entry in updates.entries) {
-      await updateMessageStatus(chatId, entry.key, entry.value);
+      await _supabase
+          .from('messages')
+          .update({'status': entry.value.toString().split('.').last})
+          .eq('id', entry.key);
     }
   }
 

@@ -101,10 +101,19 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     _statusUpdateTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
       if (mounted) setState(() {});
     });
+
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+      _presenter.loadOlderMessages();
+    }
   }
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _messageController.dispose();
     _inputFocusNode.dispose();
     _statusUpdateTimer?.cancel();
