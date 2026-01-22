@@ -1,365 +1,424 @@
 -- ============================================
--- Complete Database Schema for My Chat App (fixed)
+-- My Chat App - Professional Database Schema (WhatsApp-like)
 -- ============================================
 
--- Enable UUID and Cron extensions
+-- 1. EXTENSIONS
+-- ============================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 
+-- 2. ENUMS (Custom types for better data integrity)
 -- ============================================
--- 1. PROFILES TABLE (User profiles)
+DO $$ BEGIN
+    CREATE TYPE public.user_status AS ENUM ('ONLINE', 'OFFLINE', 'AWAY');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE public.chat_type AS ENUM ('PRIVATE', 'GROUP', 'CHANNEL');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE public.message_type AS ENUM ('TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE', 'SYSTEM');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE public.participant_role AS ENUM ('OWNER', 'ADMIN', 'MEMBER');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE public.relation_status AS ENUM ('PENDING', 'ACCEPTED', 'BLOCKED');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+DO $$ BEGIN
+    CREATE TYPE public.relation_type AS ENUM ('FRIEND', 'LOVER');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- 3. TABLES
 -- ============================================
-CREATE TABLE IF NOT EXISTS profiles (
+
+-- 3.1 PROFILES
+-- Stores user information. Linked to auth.users.
+CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  username TEXT NOT NULL UNIQUE,
+  username TEXT UNIQUE NOT NULL,
   display_name TEXT NOT NULL,
-  profile_picture_url TEXT,
-  is_online BOOLEAN DEFAULT false,
-  last_seen TIMESTAMPTZ,
-  active_chat_id TEXT,
-  avatar_color BIGINT DEFAULT (floor(random() * 16777215)::int + 4278190080),
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Create index on username for faster lookups
-CREATE INDEX IF NOT EXISTS idx_profiles_username ON profiles(username);
-
--- ============================================
--- 2. CHATS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS chats (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  participant_ids TEXT[] NOT NULL,
-  relationship_type TEXT DEFAULT 'friend',
-  last_message_time TIMESTAMPTZ DEFAULT now(),
-  last_message_content TEXT,
-  last_message_sender_id TEXT,
-  last_message_status TEXT,
-  typing_status JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Create index on participantids for faster chat lookups
-CREATE INDEX IF NOT EXISTS idx_chats_participant_ids ON chats USING GIN(participant_ids);
-
--- ============================================
--- 3. MESSAGES TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  local_id TEXT,
-  chat_id UUID NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-  sender_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  receiver_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  type TEXT NOT NULL DEFAULT 'text',
-  content TEXT NOT NULL,
-  timestamp TIMESTAMPTZ DEFAULT now(),
-  status TEXT DEFAULT 'sent',
-  reply_to_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
-  edited_content TEXT,
-  reactions JSONB DEFAULT '{}'::jsonb,
-  deleted BOOLEAN DEFAULT false,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
-
--- Enable Realtime for messages table
-ALTER TABLE messages REPLICA IDENTITY FULL;
-
--- Create indexes for faster queries
-CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
-CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_messages_receiver_id ON messages(receiver_id);
-CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_messages_local_id ON messages(local_id);
-
--- ============================================
--- 4. RELATIONSHIPS TABLE
--- ============================================
-CREATE TABLE IF NOT EXISTS relationships (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id1 UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  user_id2 UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  type TEXT NOT NULL DEFAULT 'none',
+  avatar_url TEXT,
+  avatar_color BIGINT DEFAULT (floor(random() * 16777215)::int + 4278190080), -- Fallback color
+  about TEXT DEFAULT 'Hey there! I am using My Chat App.',
+  status public.user_status DEFAULT 'OFFLINE',
+  last_seen TIMESTAMPTZ DEFAULT now(),
   created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(user_id1, user_id2)
+  updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Create index for faster relationship lookups
-CREATE INDEX IF NOT EXISTS idx_relationships_user_id1 ON relationships(user_id1);
-CREATE INDEX IF NOT EXISTS idx_relationships_user_id2 ON relationships(user_id2);
+-- Index for searching users
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
 
--- ============================================
--- ENABLE ROW LEVEL SECURITY (RLS)
--- ============================================
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
-ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE relationships ENABLE ROW LEVEL SECURITY;
 
--- Ensure participantids column/index on public.chats exists (idempotent)
-ALTER TABLE public.chats
-  ADD COLUMN IF NOT EXISTS participant_ids TEXT[];
+-- 3.2 CHATS
+-- Stores chat rooms (both 1-on-1 and groups).
+CREATE TABLE IF NOT EXISTS public.chats (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type public.chat_type NOT NULL DEFAULT 'PRIVATE',
+  name TEXT, -- Null for private chats
+  image_url TEXT,
+  created_by UUID REFERENCES public.profiles(id),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(), -- Used for sorting chat list
+  last_message_id UUID, -- Forward reference updated via trigger/function
+  metadata JSONB DEFAULT '{}'::jsonb -- For extensible settings (e.g., disappearing_messages_duration)
+);
 
-CREATE INDEX IF NOT EXISTS idx_chats_participant_ids ON public.chats USING GIN(participant_ids);
+-- Index for sorting chats
+CREATE INDEX IF NOT EXISTS idx_chats_updated_at ON public.chats(updated_at DESC);
 
--- ============================================
--- 5. FUNCTION: HANDLE USER ONLINE/OFFLINE STATUS
--- ============================================
--- This function updates the user's online status and last seen timestamp.
--- We drop it first because changing parameter names isn't allowed with CREATE OR REPLACE.
-DROP FUNCTION IF EXISTS handle_user_status(UUID, BOOLEAN);
 
-CREATE OR REPLACE FUNCTION handle_user_status(p_user_id UUID, p_online_status BOOLEAN)
+-- 3.3 CHAT PARTICIPANTS
+-- Junction table for Users <-> Chats. Stores per-user settings.
+CREATE TABLE IF NOT EXISTS public.chat_participants (
+  chat_id UUID REFERENCES public.chats(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  role public.participant_role DEFAULT 'MEMBER',
+  joined_at TIMESTAMPTZ DEFAULT now(),
+  last_read_message_id UUID, -- The last message this user has seen
+  unread_count INT DEFAULT 0, -- Denormalized counter for UI performance
+  is_muted BOOLEAN DEFAULT false,
+  is_pinned BOOLEAN DEFAULT false,
+  is_archived BOOLEAN DEFAULT false,
+  PRIMARY KEY (chat_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_participants_user ON public.chat_participants(user_id);
+CREATE INDEX IF NOT EXISTS idx_participants_chat ON public.chat_participants(chat_id);
+
+
+-- 3.4 MESSAGES
+-- Stores all message content.
+CREATE TABLE IF NOT EXISTS public.messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  chat_id UUID NOT NULL REFERENCES public.chats(id) ON DELETE CASCADE,
+  sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE SET NULL,
+  content TEXT, -- Can be null for system messages or pure attachments
+  type public.message_type DEFAULT 'TEXT',
+  metadata JSONB DEFAULT '{}'::jsonb, -- Stores file_url, size, duration, width, height, etc.
+  reply_to_message_id UUID REFERENCES public.messages(id) ON DELETE SET NULL,
+  is_edited BOOLEAN DEFAULT false,
+  is_deleted BOOLEAN DEFAULT false, -- Soft delete
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON public.messages(chat_id);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON public.messages(created_at DESC);
+
+
+-- 3.5 MESSAGE READ RECEIPTS (Granular Status)
+-- Tracks exactly who read which message (Blue ticks feature).
+-- Note: For high volume, this table grows fast. Clean up old rows if needed.
+CREATE TABLE IF NOT EXISTS public.message_read_receipts (
+  message_id UUID REFERENCES public.messages(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (message_id, user_id)
+);
+
+
+-- 3.6 MESSAGE REACTIONS
+-- Stores emoji reactions.
+CREATE TABLE IF NOT EXISTS public.message_reactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  message_id UUID NOT NULL REFERENCES public.messages(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  emoji TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(message_id, user_id, emoji) -- Prevent duplicate same-emoji reactions from same user
+);
+
+CREATE INDEX IF NOT EXISTS idx_reactions_message ON public.message_reactions(message_id);
+
+
+-- ;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trigger_handle_new_message ON public.messages;
+CREATE TRIGGER trigger_handle_new_message
+AFTER INSERT ON public.messages
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_message();
+
+
+-- 4.2 RPC: Mark Chat as Read
+-- Resets unread count and updates read receipt
+CREATE OR REPLACE FUNCTION public.mark_chat_read(p_chat_id UUID)
 RETURNS VOID AS $$
+DECLARE
+  v_last_message_id UUID;
+  v_user_id UUID;
 BEGIN
-  UPDATE public.profiles
-  SET
-    last_seen = CASE 
-      WHEN p_online_status = false AND is_online = true THEN now() 
-      ELSE last_seen 
-    END,
-    is_online = p_online_status
-  WHERE id = p_user_id;
+  v_user_id := auth.uid();
+  
+  -- Get the latest message in the chat
+  SELECT id INTO v_last_message_id
+  FROM public.messages
+  WHERE chat_id = p_chat_id
+  ORDER BY created_at DESC
+  LIMIT 1;
+
+  IF v_last_message_id IS NOT NULL THEN
+    -- Update participant status
+    UPDATE public.chat_participants
+    SET 
+      unread_count = 0,
+      last_read_message_id = v_last_message_id
+    WHERE chat_id = p_chat_id AND user_id = v_user_id;
+
+    -- Insert read receipt (idempotent)
+    INSERT INTO public.message_read_receipts (message_id, user_id)
+    VALUES (v_last_message_id, v_user_id)
+    ON CONFLICT (message_id, user_id) DO NOTHING;
+  END IF;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 
--- ============================================
--- 6. FUNCTION: DELETE OLD MESSAGES (KEEP LAST 100)
--- ============================================
--- This function keeps only the last 100 messages for each chat and deletes older ones.
-CREATE OR REPLACE FUNCTION delete_old_messages()
-RETURNS void AS $$
+-- 4.3 RPC: Create 1-on-1 Chat or Get Existing
+CREATE OR REPLACE FUNCTION public.get_or_create_private_chat(p_other_user_id UUID)
+RETURNS UUID AS $$
+DECLARE
+  v_chat_id UUID;
+  v_current_user_id UUID;
 BEGIN
-  DELETE FROM public.messages
-  WHERE id IN (
-    SELECT id
-    FROM (
-      SELECT id,
-             ROW_NUMBER() OVER (
-               PARTITION BY chat_id
-               ORDER BY timestamp DESC
-             ) as msg_rank
-      FROM public.messages
-    ) ranked_messages
-    WHERE msg_rank > 100
-  );
-END;
-$$ LANGUAGE plpgsql;
+  v_current_user_id := auth.uid();
 
+  -- Check if a private chat already exists between these two users
+  SELECT c.id INTO v_chat_id
+  FROM public.chats c
+  JOIN public.chat_participants cp1 ON c.id = cp1.chat_id
+  JOIN public.chat_participants cp2 ON c.id = cp2.chat_id
+  WHERE c.type = 'PRIVATE'
+    AND cp1.user_id = v_current_user_id
+    AND cp2.user_id = p_other_user_id;
 
--- ============================================
--- 7. CRON JOB: SCHEDULE CLEANUP EVERY HOUR AT MINUTE 26
--- ============================================
--- Unschedule any previous job with the same name to avoid duplicates.
-SELECT cron.unschedule('cleanup-old-messages');
-
--- Schedule the task to run at minute 26 of every hour.
-SELECT cron.schedule(
-  'cleanup-old-messages',
-  '26 * * * *',
-  'SELECT delete_old_messages()'
-);
-
--- ============================================
--- RLS POLICIES FOR PROFILES
--- ============================================
--- Drop existing policies if they exist
-DROP POLICY IF EXISTS "Users can view all profiles" ON profiles;
-DROP POLICY IF EXISTS "Users can insert their own profile" ON profiles;
-DROP POLICY IF EXISTS "Users can update their own profile" ON profiles;
-
--- Allow authenticated users to view all profiles
-CREATE POLICY "Users can view all profiles" 
-  ON profiles FOR SELECT 
-  TO authenticated 
-  USING (true);
-
--- Allow users to insert their own profile
-CREATE POLICY "Users can insert their own profile" 
-  ON profiles FOR INSERT 
-  TO authenticated 
-  WITH CHECK ((auth.uid())::uuid = id);
-
--- Allow users to update their own profile
-CREATE POLICY "Users can update their own profile" 
-  ON profiles FOR UPDATE 
-  TO authenticated 
-  USING ((auth.uid())::uuid = id)
-  WITH CHECK ((auth.uid())::uuid = id);
-
--- ============================================
--- RLS POLICIES FOR CHATS
--- ============================================
-DROP POLICY IF EXISTS "Users can view chats they participate in" ON chats;
-DROP POLICY IF EXISTS "Users can create chats" ON chats;
-DROP POLICY IF EXISTS "Users can update chats they participate in" ON chats;
-DROP POLICY IF EXISTS "Users can delete chats they participate in" ON chats;
-
--- Users can view chats where they are a participant
-CREATE POLICY "Users can view chats they participate in" 
-  ON chats FOR SELECT 
-  TO authenticated 
-  USING ((auth.uid())::text = ANY(participant_ids));
-
--- Users can create chats (they must be in participantids)
-CREATE POLICY "Users can create chats" 
-  ON chats FOR INSERT 
-  TO authenticated 
-  WITH CHECK ((auth.uid())::text = ANY(participant_ids));
-
--- Users can update chats they participate in
-CREATE POLICY "Users can update chats they participate in" 
-  ON chats FOR UPDATE 
-  TO authenticated 
-  USING ((auth.uid())::text = ANY(participant_ids))
-  WITH CHECK ((auth.uid())::text = ANY(participant_ids));
-
--- Users can delete chats they participate in
-CREATE POLICY "Users can delete chats they participate in" 
-  ON chats FOR DELETE 
-  TO authenticated 
-  USING ((auth.uid())::text = ANY(participant_ids));
-
--- ============================================
--- RLS POLICIES FOR MESSAGES
--- ============================================
-DROP POLICY IF EXISTS "Users can view messages in their chats" ON messages;
-DROP POLICY IF EXISTS "Users can insert messages" ON messages;
-DROP POLICY IF EXISTS "Users can update their own messages" ON messages;
-DROP POLICY IF EXISTS "Users can delete their own messages" ON messages;
-
--- Users can view messages in chats they participate in
-CREATE POLICY "Users can view messages in their chats" 
-  ON messages FOR SELECT 
-  TO authenticated 
-  USING (
-    EXISTS (
-      SELECT 1 FROM chats 
-      WHERE chats.id = messages.chat_id 
-      AND (auth.uid())::text = ANY(chats.participant_ids)
-    )
-  );
-
--- Users can insert messages where they are the sender
-CREATE POLICY "Users can insert messages" 
-  ON messages FOR INSERT 
-  TO authenticated 
-  WITH CHECK (
-    (auth.uid())::uuid = sender_id
-    AND EXISTS (
-      SELECT 1 FROM chats 
-      WHERE chats.id = messages.chat_id 
-      AND (auth.uid())::text = ANY(chats.participant_ids)
-    )
-  );
-
--- Users can update their own messages (edit, delete) or messages they receive (status, reactions)
-CREATE POLICY "Users can update their own messages or received message status" 
-  ON messages FOR UPDATE 
-  TO authenticated 
-  USING ((auth.uid())::uuid = sender_id OR (auth.uid())::uuid = receiver_id)
-  WITH CHECK ((auth.uid())::uuid = sender_id OR (auth.uid())::uuid = receiver_id);
-
--- Users can delete their own messages (soft delete via update)
-CREATE POLICY "Users can delete their own messages" 
-  ON messages FOR UPDATE 
-  TO authenticated 
-  USING ((auth.uid())::uuid = sender_id)
-  WITH CHECK ((auth.uid())::uuid = sender_id);
-
--- ============================================
--- RLS POLICIES FOR RELATIONSHIPS
--- ============================================
-DROP POLICY IF EXISTS "Users can view relationships they are part of" ON relationships;
-DROP POLICY IF EXISTS "Users can create relationships" ON relationships;
-DROP POLICY IF EXISTS "Users can update relationships they are part of" ON relationships;
-DROP POLICY IF EXISTS "Users can delete relationships they are part of" ON relationships;
-
--- Users can view relationships they are part of
-CREATE POLICY "Users can view relationships they are part of" 
-  ON relationships FOR SELECT 
-  TO authenticated 
-  USING ((auth.uid())::uuid = user_id1 OR (auth.uid())::uuid = user_id2);
-
--- Users can create relationships where they are userid1
-CREATE POLICY "Users can create relationships" 
-  ON relationships FOR INSERT 
-  TO authenticated 
-  WITH CHECK ((auth.uid())::uuid = user_id1);
-
--- Users can update relationships they are part of
-CREATE POLICY "Users can update relationships they are part of" 
-  ON relationships FOR UPDATE 
-  TO authenticated 
-  USING ((auth.uid())::uuid = user_id1 OR (auth.uid())::uuid = user_id2)
-  WITH CHECK ((auth.uid())::uuid = user_id1 OR (auth.uid())::uuid = user_id2);
-
--- Users can delete relationships they are part of
-CREATE POLICY "Users can delete relationships they are part of" 
-  ON relationships FOR DELETE 
-  TO authenticated 
-  USING ((auth.uid())::uuid = user_id1 OR (auth.uid())::uuid = user_id2);
-
--- ============================================
--- 10. STORAGE SETUP (for voice and images)
--- ============================================
--- Create the 'chat_media' bucket for voice messages and images
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('chat_media', 'chat_media', true)
-ON CONFLICT (id) DO NOTHING;
-
--- RLS Policies for storage.objects
--- 1. Allow public to read files
-CREATE POLICY "Public Access" 
-  ON storage.objects FOR SELECT 
-  TO public 
-  USING (bucket_id = 'chat_media');
-
--- 2. Allow authenticated users to upload files
-CREATE POLICY "Authenticated users can upload" 
-  ON storage.objects FOR INSERT 
-  TO authenticated 
-  WITH CHECK (bucket_id = 'chat_media');
-
--- 3. Allow users to delete files (simplified for now)
-CREATE POLICY "Users can delete files" 
-  ON storage.objects FOR DELETE 
-  TO authenticated 
-  USING (bucket_id = 'chat_media');
-
--- 1) Trigger function: mark older messages as read when a message is marked read
-CREATE OR REPLACE FUNCTION mark_older_messages_read()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  -- Only run on UPDATE
-  IF (TG_OP = 'UPDATE') THEN
-    -- Ensure the is_read column exists and transitioned to true
-    IF (NEW.is_read IS DISTINCT FROM OLD.is_read) AND (NEW.is_read = true) THEN
-      UPDATE messages
-      SET is_read = true
-      WHERE chat_id = NEW.chat_id
-        AND created_at <= COALESCE(NEW.created_at, NEW.timestamp)
-        AND is_read = false;
-    END IF;
+  -- If exists, return it
+  IF v_chat_id IS NOT NULL THEN
+    RETURN v_chat_id;
   END IF;
 
-  RETURN NEW;
-END;
-$$;
--- 2) Trigger: call function after each row update
-DROP TRIGGER IF EXISTS trigger_mark_older_messages_read ON messages;
+  -- Create new chat
+  INSERT INTO public.chats (type)
+  VALUES ('PRIVATE')
+  RETURNING id INTO v_chat_id;
 
-CREATE TRIGGER trigger_mark_older_messages_read
-AFTER UPDATE ON messages
-FOR EACH ROW
-EXECUTE FUNCTION mark_older_messages_read();
+  -- Add participants
+  INSERT INTO public.chat_participants (chat_id, user_id)
+  VALUES 
+    (v_chat_id, v_current_user_id),
+    (v_chat_id, p_other_user_id);
+
+  -- Return the created chat id
+  RETURN v_chat_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 4.4 RPC: Send Relationship Request
+CREATE OR REPLACE FUNCTION public.send_relationship_request(p_target_user_id UUID, p_type public.relation_type DEFAULT 'FRIEND')
+RETURNS VOID AS $$
+DECLARE
+  v_user_id UUID;
+  v_exists BOOLEAN;
+BEGIN
+  v_user_id := auth.uid();
+  
+  -- Prevent self-request
+  IF v_user_id = p_target_user_id THEN
+    RAISE EXCEPTION 'Cannot send request to self';
+  END IF;
+
+  -- Check if any relationship exists (in either direction)
+  SELECT EXISTS(
+    SELECT 1 FROM public.relationships 
+    WHERE (requester_id = v_user_id AND receiver_id = p_target_user_id)
+       OR (requester_id = p_target_user_id AND receiver_id = v_user_id)
+  ) INTO v_exists;
+
+  IF v_exists THEN
+    RAISE EXCEPTION 'Relationship already exists or is pending';
+  END IF;
+
+  -- Insert new request
+  INSERT INTO public.relationships (requester_id, receiver_id, status, type)
+  VALUES (v_user_id, p_target_user_id, 'PENDING', p_type);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 4.5 RPC: Update Relationship (Accept/Block/Change Type)
+CREATE OR REPLACE FUNCTION public.update_relationship(p_target_user_id UUID, p_status public.relation_status, p_type public.relation_type DEFAULT NULL)
+RETURNS VOID AS $$
+DECLARE
+  v_user_id UUID;
+BEGIN
+  v_user_id := auth.uid();
+
+  -- Update where current user is receiver (Accepting) OR requester (Changing type/Blocking)
+  -- Case 1: I am receiver, I accept.
+  UPDATE public.relationships
+  SET 
+    status = p_status,
+    type = COALESCE(p_type, type),
+    updated_at = now()
+  WHERE (receiver_id = v_user_id AND requester_id = p_target_user_id)
+     OR (requester_id = v_user_id AND receiver_id = p_target_user_id);
+     
+  -- Note: Complex block logic (who blocked who) might need a separate 'blocked_by' column 
+  -- but for simple implementation, status='BLOCKED' is shared.
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+-- 5. RLS POLICIES
 -- ============================================
--- GRANT PERMISSIONS (if needed)
+
+-- Enable RLS
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.message_read_receipts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public profiles are viewable by everyone" ON public.profiles;
+CREATE POLICY "Public profiles are viewable by everyone" ON public.profiles
+  FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
+CREATE POLICY "Users can update own profile" ON public.profiles
+  FOR UPDATE USING ((SELECT auth.uid()) = id);
+
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+CREATE POLICY "Users can insert own profile" ON public.profiles
+  FOR INSERT WITH CHECK ((SELECT auth.uid()) = id);
+
+-- Chats
+DROP POLICY IF EXISTS "View own chats" ON public.chats;
+CREATE POLICY "View own chats" ON public.chats FOR SELECT
+USING (EXISTS (
+  SELECT 1 FROM public.chat_participants WHERE chat_id = id AND user_id = auth.uid()
+));
+
+-- Chat Participants
+DROP POLICY IF EXISTS "View participants of own chats" ON public.chat_participants;
+CREATE POLICY "View participants of own chats" ON public.chat_participants FOR SELECT
+USING (EXISTS (
+  SELECT 1 FROM public.chat_participants cp 
+  WHERE cp.chat_id = chat_participants.chat_id AND cp.user_id = auth.uid()
+));
+
+-- Messages
+-- View messages in chats you belong to
+DROP POLICY IF EXISTS "View chat messages" ON public.messages;
+CREATE POLICY "View chat messages" ON public.messages FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.chat_participants
+    WHERE chat_id = messages.chat_id
+      AND user_id = auth.uid()
+  )
+);
+
+-- Message Reactions
+DROP POLICY IF EXISTS "View reactions" ON public.message_reactions;
+CREATE POLICY "View reactions" ON public.message_reactions FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.messages m
+    JOIN public.chat_participants cp ON m.chat_id = es FOR UPDATE
+USING (auth.uid() = sender_id);
+
+
+-- Relationships
+ALTER TABLE public.relationships ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "View own relationships" ON public.relationships;
+CREATE POLICY "View own relationships" ON public.relationships FOR SELECT
+USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
+
+DROP POLICY IF EXISTS "Update own relationships" ON public.relationships;
+CREATE POLICY "Updatc own relationshipp" ON.public.relationships chat_id
+    WHEauth.uid() = requester_id OR RE m.id = pubreceiver_id);
+
+-- Inlirt hac.lmd via RPC usually, but policy allows if needed (requester only)
+DROP POLICY IF EXISTS "Insert relationship request" ON public.eelationships;
+CREATE POLICY "Insert relationship request" ON public.relationships FOR INSERT
+WITH CHECK (auth.uid() = requesterssage
+
+DROP POLICY IF EXISTS "Delete own relationships" ON public.relationships;
+CREATE POLICY "Delete own relationships" ON public.relationships FOR DELETE
+USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
+_reactions.message_id
+      AND cp.user_id = auth.uid()
+  )
+);
+
+DROP POLICY IF EXISTS "Add reaction" ON public.message_reactions;
+CREATE POLICY "Add reaction" ON public.message_reactions FOR INSERT
+WITH CHECK (
+  auth.uid() = user_id AND
+  EXISTS (
+    SELECT 1
+    FROM public.messages m
+    JOIN public.chat_participants cp ON m.chat_id = cp.chat_id
+    WHERE m.id = public.message_reactions.message_id
+      AND cp.user_id = auth.uid()
+  )
+);
+
+DROP POLICY IF EXISTS "Remove own reaction" ON public.message_reactions;
+CREATE POLICY "Remove own reaction" ON public.message_reactions FOR DELETE
+USING (auth.uid() = user_id);
+
+-- Insert messages in chats you belong to
+DROP POLICY IF EXISTS "Send messages" ON public.messages;
+CREATE POLICY "Send messages" ON public.messages FOR INSERT
+WITH CHECK (
+  auth.uid() = sender_id AND
+  EXISTS (
+    SELECT 1
+    FROM public.chat_participants
+    WHERE chat_id = public.messages.chat_id
+      AND user_id = auth.uid()
+  )
+);
+
+-- Update own messages
+DROP POLICY IF EXISTS "Update own messages" ON public.messages;
+CREATE POLICY "Update own messages" ON public.messages FOR UPDATE
+USING (auth.uid() = sender_id);
+
+-- 6. STORAGE (Media)
 -- ============================================
--- Grant usage on schema (usually not needed as authenticated role has access)
--- GRANT USAGE ON SCHEMA public TO authenticated;
--- GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+-- Ensure bucket exists
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('chat_attachments', 'chat_attachments', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- Policies for Storage
+
+DROP POLICY IF EXISTS "Public Access" ON storage.objects;
+CREATE POLICY "Public Access" ON storage.objects FOR SELECT TO public USING (bucket_id = 'chat_attachments');
+DROP POLICY IF EXISTS "Auth Upload" ON storage.objects;
+CREATE POLICY "Auth Upload" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'chat_attachments');
