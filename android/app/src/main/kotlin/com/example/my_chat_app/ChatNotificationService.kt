@@ -110,7 +110,8 @@ class ChatNotificationService : INotificationServiceExtension {
             putExtra("chat_id", chatId)
             putExtra("chatid", chatId)
             putExtra("from_bubble", true)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            // Remove FLAG_ACTIVITY_NEW_TASK to launch inside the bubble window (same task)
+            // remove FLAG_ACTIVITY_CLEAR_TOP to avoid killing the app if it was in background
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -180,7 +181,8 @@ class ChatNotificationService : INotificationServiceExtension {
             putExtra("chat_id", chatId)
             putExtra("chatid", chatId)
             putExtra("from_bubble", true)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            // Remove FLAG_ACTIVITY_NEW_TASK to launch inside the bubble window (same task)
+            // remove FLAG_ACTIVITY_CLEAR_TOP to avoid killing the app if it was in background
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE

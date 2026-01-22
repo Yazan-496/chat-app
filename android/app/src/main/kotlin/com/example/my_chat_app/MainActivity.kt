@@ -38,7 +38,14 @@ open class MainActivity : FlutterActivity() {
     private val messagesChannelId = "messages_channel_v7"
     private var lastBubbleChatId: String? = null
 
-    override fun provideFlutterEngine(context: Context): FlutterEngine {
+    override fun provideFlutterEngine(context: Context): FlutterEngine? {
+        val fromBubble = intent.getBooleanExtra("from_bubble", false)
+        // Check if this activity instance is part of a bubble task
+        // We can infer this if we are not the root of the task, OR if we were launched with from_bubble
+        if (fromBubble) {
+            Log.d("LoZoBubble", "Creating new engine for bubble instance (from_bubble=true)")
+            return null
+        }
         return getOrCreateEngine(context)
     }
 
@@ -454,9 +461,7 @@ open class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra("from_bubble", false)) {
-            return
-        }
+        
         if (intent.action == Intent.ACTION_MAIN) {
             return
         }

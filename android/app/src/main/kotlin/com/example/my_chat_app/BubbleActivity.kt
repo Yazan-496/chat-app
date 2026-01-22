@@ -12,10 +12,13 @@ class BubbleActivity : AppCompatActivity() {
 
         if (chatId.isNotEmpty()) {
             val flutterIntent = Intent(this, MainActivity::class.java).apply {
+                action = Intent.ACTION_MAIN
+                addCategory(Intent.CATEGORY_LAUNCHER)
                 putExtra("chat_id", chatId)
                 putExtra("chatid", chatId)
                 putExtra("from_bubble", true)
-                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                // Use SINGLE_TOP to reuse existing activity if possible, or create new one in THIS task
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
             }
             startActivity(flutterIntent)
             overridePendingTransition(0, 0)
