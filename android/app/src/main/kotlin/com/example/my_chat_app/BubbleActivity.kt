@@ -15,11 +15,14 @@ class BubbleActivity : AppCompatActivity() {
                 putExtra("chat_id", chatId)
                 putExtra("chatid", chatId)
                 putExtra("from_bubble", true)
+                addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
             }
             startActivity(flutterIntent)
+            overridePendingTransition(0, 0)
         }
 
         finish()
+        overridePendingTransition(0, 0)
     }
 
     override fun onBackPressed() {

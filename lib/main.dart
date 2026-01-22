@@ -106,7 +106,16 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
         chatId = args;
       }
       if (call.method == 'bubbleChat') {
-        // No-op or handle if needed
+        if (chatId != null && chatId.isNotEmpty) {
+          // If we receive bubbleChat, it means we are launched inside a bubble.
+          // We should prioritize this chatId and update the state.
+          if (mounted) {
+            setState(() {
+              _pendingChatId = chatId;
+              _showSplash = false;
+            });
+          }
+        }
       } else if (call.method == 'onLaunchChatId') {
         if (chatId != null && chatId.isNotEmpty && mounted) {
           setState(() {
@@ -117,6 +126,8 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
       }
       return null;
     });
+
+    _checkBubbleLaunch();
 
     final initialPending = NotificationService.consumePendingNavigationChatId();
     if (initialPending != null) {
@@ -261,6 +272,22 @@ class MainAppState extends State<MainApp> with WidgetsBindingObserver implements
 
   bool hasPendingChatId() {
     return _pendingChatId != null;
+  }
+
+  Future<void> _checkBubbleLaunch() async {
+    try {
+      final isBubble = await _bubbleChannel.invokeMethod<bool>('isBubble') ?? false;
+      if (isBubble) {
+        final chatId = await _bubbleChannel.invokeMethod<String>('getLaunchChatId');
+        if (chatId != null && chatId.isNotEmpty && mounted) {
+           setState(() {
+             _pendingChatId = chatId;
+             _showSplash = false;
+           });
+        }
+      }
+    } catch (_) {
+    }
   }
 }
 

@@ -105,9 +105,12 @@ class ChatNotificationService : INotificationServiceExtension {
 
     private fun createContentIntent(context: Context, chatId: String): PendingIntent {
         val intent = Intent(context, BubbleActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("https://lozo.chat/chat/$chatId")
             putExtra("chat_id", chatId)
             putExtra("chatid", chatId)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra("from_bubble", true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -172,9 +175,12 @@ class ChatNotificationService : INotificationServiceExtension {
         val manager = context.getSystemService<NotificationManager>() ?: return null
         val appAllowed = try { manager.areBubblesAllowed() } catch (_: Exception) { false }
         val bubbleIntent = Intent(context, BubbleActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("https://lozo.chat/chat/$chatId")
             putExtra("chat_id", chatId)
             putExtra("chatid", chatId)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            putExtra("from_bubble", true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         }
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
@@ -207,9 +213,11 @@ class ChatNotificationService : INotificationServiceExtension {
             .setIcon(shortcutIcon)
             .setIntent(Intent(context, BubbleActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
+                data = Uri.parse("https://lozo.chat/chat/$chatId")
                 putExtra("chat_id", chatId)
                 putExtra("chatid", chatId)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                putExtra("from_bubble", true)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             })
             .build()
         ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
