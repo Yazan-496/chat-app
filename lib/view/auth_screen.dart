@@ -91,7 +91,7 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.blueAccent.withOpacity(0.1),
+                  color: Colors.blueAccent.withValues(alpha: 26),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(Icons.chat_bubble_rounded, color: Colors.blueAccent, size: 48),
@@ -135,15 +135,15 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
                     itemBuilder: (context, index) {
                       final user = _presenter.recentUsers[index];
                       return Dismissible(
-                        key: ValueKey(user.uid),
+                        key: ValueKey(user.id),
                         direction: DismissDirection.up,
                         onDismissed: (direction) async {
-                          await _presenter.removeRecentUid(user.uid);
+                          await _presenter.removeRecentUid(user.id);
                         },
                         background: Container(
                           margin: const EdgeInsets.symmetric(horizontal: 8),
                           decoration: BoxDecoration(
-                            color: Colors.redAccent.withOpacity(0.2),
+                            color: Colors.redAccent.withValues(alpha: 51),
                             shape: BoxShape.circle,
                           ),
                           alignment: Alignment.center,
@@ -167,10 +167,10 @@ class _AuthScreenState extends State<AuthScreen> implements AuthView {
                                   child: CircleAvatar(
                                     radius: 30,
                                     backgroundColor: Colors.grey.shade900,
-                                    backgroundImage: user.profilePictureUrl != null
-                                        ? CachedNetworkImageProvider(user.profilePictureUrl!)
+                                    backgroundImage: user.avatarUrl != null
+                                        ? CachedNetworkImageProvider(user.avatarUrl!)
                                         : null,
-                                    child: user.profilePictureUrl == null
+                                    child: user.avatarUrl == null
                                         ? Text(
                                             user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '?',
                                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),

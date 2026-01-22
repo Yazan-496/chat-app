@@ -45,7 +45,7 @@ class _MessageItemState extends State<MessageItem> {
 
   @override
   Widget build(BuildContext context) {
-    final timeLabel = DateFormat('HH:mm').format(widget.message.timestamp);
+    final timeLabel = DateFormat('HH:mm').format(widget.message.createdAt ?? DateTime.now());
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 2.0),
       child: Row(
@@ -129,11 +129,11 @@ class _MessageItemState extends State<MessageItem> {
                       children: [
                         if (widget.message.type == MessageType.text)
                           Text(
-                            widget.message.deleted ? 'Removed message' : (widget.message.editedContent ?? widget.message.content),
+                            widget.message.isDeleted ? 'Removed message' : (widget.message.content ?? ''),
                             style: TextStyle(
-                              color: widget.message.deleted ? Colors.white70 : Colors.white,
-                              fontStyle: widget.message.deleted ? FontStyle.italic : FontStyle.normal,
-                              decoration: widget.message.deleted ? TextDecoration.lineThrough : TextDecoration.none,
+                              color: widget.message.isDeleted ? Colors.white70 : Colors.white,
+                              fontStyle: widget.message.isDeleted ? FontStyle.italic : FontStyle.normal,
+                              decoration: widget.message.isDeleted ? TextDecoration.lineThrough : TextDecoration.none,
                               fontSize: widget.isOnlyEmojis ? 40 : 16,
                             ),
                           ),
@@ -141,7 +141,7 @@ class _MessageItemState extends State<MessageItem> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(12),
                             child: CachedNetworkImage(
-                              imageUrl: widget.message.content,
+                              imageUrl: widget.message.content ?? '',
                               width: 200,
                               fit: BoxFit.cover,
                               placeholder: (context, url) => Container(
@@ -153,12 +153,14 @@ class _MessageItemState extends State<MessageItem> {
                               errorWidget: (context, url, error) => const Icon(Icons.error),
                             ),
                           ),
-                        if (widget.message.type == MessageType.voice)
+                        if (widget.message.type == MessageType.audio)
                           Padding(
                             padding: const EdgeInsets.only(top: 4.0),
                             child: VoiceMessagePlayer(
-                              audioUrl: widget.message.content,
-                              backgroundColor: widget.isMe ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1),
+                              audioUrl: widget.message.content ?? '',
+                              backgroundColor: widget.isMe
+                                  ? Colors.white.withValues(alpha: 26)
+                                  : Colors.black.withValues(alpha: 26),
                               textColor: Colors.white,
                             ),
                           ),
@@ -167,7 +169,7 @@ class _MessageItemState extends State<MessageItem> {
                             mainAxisAlignment: MainAxisAlignment.end,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (widget.message.editedContent != null && !widget.message.deleted)
+                              if (widget.message.content != null && !widget.message.isDeleted)
                                 const Padding(
                                   padding: EdgeInsets.only(right: 4.0),
                                   child: Icon(Icons.edit, size: 12, color: Colors.white70),
@@ -181,7 +183,7 @@ class _MessageItemState extends State<MessageItem> {
                       ],
                     ),
                   ),
-                  if (widget.message.reactions.isNotEmpty)
+                  if (widget.message.reactions.isNotEmpty && !widget.message.isDeleted)
                     Positioned(
                       bottom: -10,
                       right: widget.isMe ? null : -10,

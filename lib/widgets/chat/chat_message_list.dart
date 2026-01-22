@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/model/message.dart';
-import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/widgets/chat/message_item_wrapper.dart';
 
 class ChatMessageList extends StatelessWidget {
   final ScrollController scrollController;
   final List<Message> messages;
-  final Chat chat;
   final ChatPresenter presenter;
   final bool isLoading;
   final Map<String, GlobalKey> messageKeys;
@@ -25,7 +23,6 @@ class ChatMessageList extends StatelessWidget {
     super.key,
     required this.scrollController,
     required this.messages,
-    required this.chat,
     required this.presenter,
     required this.isLoading,
     required this.messageKeys,
@@ -70,9 +67,8 @@ class ChatMessageList extends StatelessWidget {
           message: message,
           isMe: isMe,
           showAvatar: showAvatar,
-          chat: chat,
           presenter: presenter,
-          isOnlyEmojis: isOnlyEmojis(message.content) && message.type == MessageType.text,
+          isOnlyEmojis: isOnlyEmojis(message.content ?? '') && message.type == MessageType.text,
           onLongPress: onLongPress,
           onDoubleTapReact: onDoubleTapReact,
           onReplyTap: onReplyTap,

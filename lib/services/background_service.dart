@@ -25,23 +25,8 @@ void onStart(ServiceInstance service) async {
   });
 
   service.on('app_in_foreground').listen((event) async {
-    await NotificationService.stopGlobalMessageListener();
   });
 
   service.on('app_in_background').listen((event) async {
-    String? userId = event?['user_id'];
-    if (userId == null) {
-      final user = SupabaseManager.client.auth.currentUser;
-      userId = user?.id;
-    }
-
-    if (userId != null) {
-      await NotificationService.startGlobalMessageListener(userId);
-    }
   });
-
-  final user = SupabaseManager.client.auth.currentUser;
-  if (user != null) {
-    await NotificationService.startGlobalMessageListener(user.id);
-  }
 }

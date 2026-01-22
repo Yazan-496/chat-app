@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:audioplayers/audioplayers.dart';
 
 class VoiceMessagePlayer extends StatefulWidget {
@@ -74,13 +75,13 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
 
   Future<void> _setAudioSource() async {
     if (widget.audioUrl.isEmpty) {
-      print('Error setting audio source: URL is empty');
+      debugPrint('Error setting audio source: URL is empty');
       return;
     }
     try {
       await _audioPlayer.setSourceUrl(widget.audioUrl);
     } catch (e) {
-      print('Error setting audio source: $e');
+      debugPrint('Error setting audio source: $e');
     }
   }
 
@@ -99,8 +100,6 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isMe = widget.backgroundColor == Colors.transparent; // Rough way to check if it's 'me' based on current MessageItem implementation
-    
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -124,7 +123,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: widget.textColor.withOpacity(0.2),
+                color: widget.textColor.withValues(alpha: 51),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -160,7 +159,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
                           decoration: BoxDecoration(
                             color: isPlayed 
                                 ? (widget.playedColor ?? widget.textColor)
-                                : widget.textColor.withOpacity(0.3),
+                                : widget.textColor.withValues(alpha: 77),
                             borderRadius: BorderRadius.circular(1),
                           ),
                         );
@@ -202,7 +201,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
                       ? _formatDuration(_position)
                       : _formatDuration(_duration),
                   style: TextStyle(
-                    color: widget.textColor.withOpacity(0.7),
+                    color: widget.textColor.withValues(alpha: 179),
                     fontSize: 10,
                   ),
                 ),
@@ -215,7 +214,7 @@ class _VoiceMessagePlayerState extends State<VoiceMessagePlayer> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: widget.textColor.withOpacity(0.15),
+                color: widget.textColor.withValues(alpha: 38),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(

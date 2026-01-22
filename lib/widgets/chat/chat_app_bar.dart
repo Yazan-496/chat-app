@@ -1,23 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:my_chat_app/model/chat.dart';
+import 'package:my_chat_app/model/profile.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/l10n/app_localizations.dart';
 import 'package:my_chat_app/view/profile_screen.dart';
 
 class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
-  final Chat chat;
+  final Profile otherProfile;
   final ChatPresenter presenter;
   final bool isConnected;
   final VoidCallback onBack;
+  final bool isBubble;
 
   const ChatAppBar({
     super.key,
-    required this.chat,
+    required this.otherProfile,
     required this.presenter,
     required this.isConnected,
     required this.onBack,
+    this.isBubble = false,
   });
 
   @override
@@ -44,21 +46,27 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isOnline = otherProfile.status == UserStatus.online;
     return AppBar(
       elevation: 0,
       backgroundColor: Colors.black,
       surfaceTintColor: Colors.transparent, // Prevent Material 3 color shifts
-      leading: IconButton(
-        icon: const Icon(Icons.arrow_back, color: Colors.white),
-        onPressed: onBack,
-      ),
+      leading: isBubble
+          ? null
+          : IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: onBack,
+            ),
+      automaticallyImplyLeading: false,
       titleSpacing: 0,
       title: GestureDetector(
-        onTap: () {
+        onTap: isBubble
+            ? null
+            : () {
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ProfileScreen(
-                userId: chat.getOtherUserId(presenter.currentUserId!),
+                userId: otherProfile.id,
               ),
             ),
           );
@@ -69,15 +77,17 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
               children: [
                 CircleAvatar(
                   radius: 20,
-                  backgroundColor: chat.avatarColor != null
-                      ? Color(chat.avatarColor!)
+                  backgroundColor: otherProfile.avatarColor != null
+                      ? Color(otherProfile.avatarColor!)
                       : Colors.blue.shade300,
-                  backgroundImage: chat.profilePictureUrl != null
-                      ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+                  backgroundImage: otherProfile.avatarUrl != null
+                      ? CachedNetworkImageProvider(otherProfile.avatarUrl!)
                       : null,
-                  child: chat.profilePictureUrl == null
+                  child: otherProfile.avatarUrl == null
                       ? Text(
-                          chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                          otherProfile.displayName.isNotEmpty
+                              ? otherProfile.displayName[0].toUpperCase()
+                              : '',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -85,7 +95,7 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
                         )
                       : null,
                 ),
-                if (chat.isActuallyOnline && isConnected)
+                if (isOnline && isConnected)
                   Positioned(
                     bottom: 0,
                     right: 0,
@@ -106,24 +116,19 @@ class ChatAppBar extends StatelessWidget implements PreferredSizeWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  chat.displayName,
+                  otherProfile.displayName,
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
                 if (isConnected)
-                  if (presenter.otherUserTyping && chat.isActuallyOnline)
+                  if (presenter.otherUserTyping && isOnline)
                     Text(
                       AppLocalizations.of(context).translate('typing'),
                       style: const TextStyle(fontSize: 12, color: Colors.white70),
                     )
-                  else if (presenter.otherUserInChat && chat.isActuallyOnline)
-                    const Text(
-                      'In Chat',
-                      style: TextStyle(fontSize: 12, color: Colors.white70),
-                    )
                   else
                     Text(
-                      chat.isActuallyOnline ? 'Online' : _formatLastSeen(chat.lastSeen),
+                      isOnline ? 'Online' : _formatLastSeen(otherProfile.lastSeen),
                       style: const TextStyle(fontSize: 12, color: Colors.white70),
                     ),
               ],

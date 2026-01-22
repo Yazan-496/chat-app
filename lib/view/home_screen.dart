@@ -5,9 +5,10 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:my_chat_app/main.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:my_chat_app/model/chat.dart';
+import 'package:my_chat_app/model/chat_summary.dart';
 import 'package:my_chat_app/model/message.dart';
-import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/model/user_relationship.dart';
+import 'package:my_chat_app/model/profile.dart';
 import 'package:my_chat_app/services/encryption_service.dart';
 import 'package:my_chat_app/services/local_storage_service.dart';
 import 'package:my_chat_app/presenter/home_presenter.dart';
@@ -24,7 +25,7 @@ import 'package:my_chat_app/view/relationship_selection_dialog.dart';
 import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/services/presence_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
-import 'package:my_chat_app/model/user.dart' as app_user;
+import 'package:my_chat_app/model/profile.dart' as app_user;
 import 'package:flutter/services.dart';
 import 'package:my_chat_app/utils/toast_utils.dart';
 
@@ -44,27 +45,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   final SupabaseClient _supabase = Supabase.instance.client;
   final EncryptionService _encryptionService = EncryptionService();
   final LocalStorageService _localStorageService = LocalStorageService();
-  List<Chat> _chats = [];
-  List<app_user.User> _discoveredUsers = [];
+  List<ChatSummary> _chats = [];
+  List<app_user.Profile> _discoveredUsers = [];
   bool _isLoading = false;
   bool _isSearching = false;
   bool _isDiscoveryLoading = false;
-  app_user.User? _currentUserProfile;
+  app_user.Profile? _currentUserProfile;
   StreamSubscription<String>? _navigationSubscription;
   RealtimeChannel? _statusChannel;
-  String? _initialChatId;
   Timer? _statusUpdateTimer;
   Timer? _connectionDebounceTimer;
   bool _isConnected = true;
   bool _showRestoredMessage = false;
   Timer? _restoredMessageTimer;
+  bool _isProcessingInitialChat = false;
 
   @override
   void initState() {
     super.initState();
+    if (widget.initialChatId != null) {
+      _isProcessingInitialChat = true;
+    }
     _discoveryPresenter = UserDiscoveryPresenter(this);
     _presenter = HomePresenter(this);
-    _initialChatId = widget.initialChatId;
     WidgetsBinding.instance.addObserver(this);
     _presenter?.loadChats();
     _loadCurrentUserProfile();
@@ -111,19 +114,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
     // Listen for notification taps while the app is in foreground
     _navigationSubscription = NotificationService.navigationStream.listen((chatId) {
-      // Only set pending ID and navigate if we are NOT already on the home screen
-      // or if the chat ID is different from what we might be viewing.
-      // But wait! This is HomeScreen. If we are here, we are on the list.
-      // So we should just navigate.
-      
-      // Prevent infinite loops if the stream emits repeatedly for the same ID
-      // by checking if we are already navigating or if it's a stale event?
-      // Actually, setPendingNavigationChatId might be re-triggering this.
-      
-      // Let's consume it immediately to prevent re-reads
-      if (NotificationService.consumePendingNavigationChatId() == chatId) {
-         _checkAndNavigateWithId(chatId);
-      }
+      if (!mounted) return;
+      _checkAndNavigateWithId(chatId);
     });
 
     // Periodic timer to refresh "last seen" labels (e.g., from "1s ago" to "2s ago")
@@ -179,7 +171,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   }
 
   @override
-  void displaySearchResults(List<app_user.User> users) {
+  void displaySearchResults(List<app_user.Profile> users) {
     setState(() {
       _discoveredUsers = users;
     });
@@ -195,10 +187,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     if (mounted) {
       setState(() {
         for (int i = 0; i < _chats.length; i++) {
-          if (_chats[i].participantIds.contains(userId)) {
+          if (_chats[i].otherProfile.id == userId) {
             _chats[i] = _chats[i].copyWith(
-              isOnline: isOnline,
-              lastSeen: lastSeen,
+              otherProfile: _chats[i].otherProfile.copyWith(
+                status: isOnline ? UserStatus.online : UserStatus.offline,
+                lastSeen: lastSeen,
+              ),
             );
           }
         }
@@ -239,7 +233,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
           _checkAndNavigate();
         }
       } catch (e) {
-        print('Error checking notification launch: $e');
+        debugPrint('Error checking notification launch: $e');
       }
     }
 
@@ -255,32 +249,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   }
 
   @override
-  void displayChats(List<Chat> chats) {
+  void displayChats(List<ChatSummary> chats) {
     setState(() {
       _chats = chats;
     });
     _checkAndNavigate();
   }
-
-  Future<void> _checkAndNavigate() async {
+Future<void> _checkAndNavigate() async {
     if (!mounted) return;
 
     final mainApp = context.findAncestorStateOfType<MainAppState>();
-    final pendingId = mainApp?.consumePendingChatId() ?? 
-                     _consumeInitialChatId() ?? 
-                     NotificationService.consumePendingNavigationChatId();
-    
+    final pendingId = mainApp?.consumePendingChatId();
+
     if (pendingId != null) {
+      if (mounted) setState(() => _isProcessingInitialChat = true);
       _checkAndNavigateWithId(pendingId);
+    } else if (widget.initialChatId != null && _isProcessingInitialChat) {
+        // Fallback: If widget.initialChatId was passed but pendingId was already consumed or null
+        // We still need to process it if we haven't yet.
+        _checkAndNavigateWithId(widget.initialChatId!);
     }
   }
+
 
   Future<void> _checkAndNavigateWithId(String pendingId) async {
     debugPrint('HomeScreen: Found pending chatId to navigate: $pendingId');
     
-    Chat? target;
+    ChatSummary? target;
     for (final c in _chats) {
-      if (c.id == pendingId) {
+      if (c.chat.id == pendingId) {
         target = c;
         break;
       }
@@ -290,25 +287,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       _navigateToChat(target);
     } else {
       debugPrint('HomeScreen: Target chat $pendingId not found in loaded chats. Fetching directly.');
-      showLoading();
+      // Keep loading indicator
       final fetchedChat = await _presenter?.getChat(pendingId);
-      hideLoading();
       
       if (fetchedChat != null && mounted) {
         _navigateToChat(fetchedChat);
       } else {
         debugPrint('HomeScreen: Error - Could not fetch chat $pendingId');
+        if (mounted) setState(() => _isProcessingInitialChat = false);
       }
     }
   }
 
-  void _navigateToChat(Chat chat) {
-    debugPrint('HomeScreen: Navigating to chat: ${chat.id}');
+  void _navigateToChat(ChatSummary chat) {
+    debugPrint('HomeScreen: Navigating to chat: ${chat.chat.id}');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (context) => ChatScreen(chat: chat),
+          builder: (context) => ChatScreen(
+            chat: chat.chat,
+            otherProfile: chat.otherProfile,
+          ),
         ),
       );
     });
@@ -316,15 +316,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   bool _isNavigationPending() {
     final mainApp = context.findAncestorStateOfType<MainAppState>();
-    return mainApp?.hasPendingChatId() == true || 
-           _initialChatId != null || 
-           NotificationService.hasPendingNavigationChatId();
+    return mainApp?.hasPendingChatId() == true;
   }
 
-  String? _consumeInitialChatId() {
-    final id = _initialChatId;
-    _initialChatId = null;
-    return id;
+
+  List<String> _participantIds(ChatSummary chat) {
+    return [chat.chat.userOneId, chat.chat.userTwoId];
+  }
+
+  String _displayName(ChatSummary chat) {
+    return chat.otherProfile.displayName;
+  }
+
+  String _shortDisplayName(ChatSummary chat) {
+    return chat.otherProfile.displayName.split(' ').first;
+  }
+
+  String? _avatarUrl(ChatSummary chat) {
+    return chat.otherProfile.avatarUrl;
+  }
+
+  int? _avatarColor(ChatSummary chat) {
+    return chat.otherProfile.avatarColor;
+  }
+
+  bool _isActuallyOnline(ChatSummary chat) {
+    return chat.otherProfile.status == UserStatus.online;
+  }
+
+  DateTime? _lastSeen(ChatSummary chat) {
+    return chat.otherProfile.lastSeen;
+  }
+
+  String? _lastMessageContent(ChatSummary chat) {
+    return chat.lastMessage?.content;
+  }
+
+  String? _lastMessageSenderId(ChatSummary chat) {
+    return chat.lastMessage?.senderId;
+  }
+
+  DateTime? _lastMessageTime(ChatSummary chat) {
+    return chat.lastMessage?.createdAt;
+  }
+
+  MessageStatus? _lastMessageStatus(ChatSummary chat) {
+    final lastMessage = chat.lastMessage;
+    if (lastMessage == null) return null;
+    if (chat.deliveredStatus.lastReadMessageId == lastMessage.id) {
+      return MessageStatus.read;
+    }
+    if (chat.deliveredStatus.lastDeliveredMessageId == lastMessage.id) {
+      return MessageStatus.delivered;
+    }
+    return lastMessage.status;
   }
 
   @override
@@ -351,12 +396,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       });
     }
 
-    // 2. Force reconnect if disconnected
-    if (!isActuallyConnected) {
-      _supabase.realtime.connect();
-    }
-
-    // 3. Refresh Presence
+    // 2. Refresh Presence
     final userId = _supabase.auth.currentUser?.id;
     if (userId != null) {
       PresenceService().setUserOnline(userId);
@@ -365,7 +405,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
 
   @override
   Widget build(BuildContext context) {
-    if ((_isLoading && !_isSearching && _chats.isEmpty) || _isNavigationPending()) {
+    if (_isNavigationPending() || _isProcessingInitialChat) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_isLoading && !_isSearching && _chats.isEmpty) {
       final message = 'LoZo';
       return SplashScreen(message: message);
     }
@@ -423,7 +469,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             if (!_isConnected)
               Container(
                 width: double.infinity,
-                color: Colors.redAccent.withOpacity(0.9),
+                color: Colors.redAccent.withValues(alpha: 230),
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -442,7 +488,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             if (_showRestoredMessage)
               Container(
                 width: double.infinity,
-                color: Colors.green.withOpacity(0.9),
+                color: Colors.green.withValues(alpha: 230),
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 child: const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -556,9 +602,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               child: Builder(
                 builder: (context) {
                   final activeChats = _chats.where((chat) {
-                    if (chat.isActuallyOnline) return true;
-                    if (chat.lastSeen == null) return false;
-                    final difference = DateTime.now().difference(chat.lastSeen!);
+                    if (_isActuallyOnline(chat)) return true;
+                    final lastSeen = _lastSeen(chat);
+                    if (lastSeen == null) return false;
+                    final difference = DateTime.now().difference(lastSeen);
                     return difference.inMinutes < 1;
                   }).toList();
 
@@ -643,10 +690,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   backgroundColor: _currentUserProfile?.avatarColor != null 
                       ? Color(_currentUserProfile!.avatarColor!) 
                       : Colors.grey,
-                  backgroundImage: _currentUserProfile?.profilePictureUrl != null
-                      ? CachedNetworkImageProvider(_currentUserProfile!.profilePictureUrl!)
+                  backgroundImage: _currentUserProfile?.avatarUrl != null
+                      ? CachedNetworkImageProvider(_currentUserProfile!.avatarUrl!)
                       : null,
-                  child: _currentUserProfile?.profilePictureUrl == null
+                  child: _currentUserProfile?.avatarUrl == null
                       ? Text(
                           _currentUserProfile?.displayName.isNotEmpty == true 
                               ? _currentUserProfile!.displayName[0].toUpperCase() 
@@ -691,11 +738,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
   Widget _buildSearchResults() {
     final query = _searchController.text.toLowerCase();
     final filteredChats = _chats.where((chat) => 
-      chat.displayName.toLowerCase().contains(query)
+      _displayName(chat).toLowerCase().contains(query)
     ).toList();
 
     final discoveryResults = _discoveredUsers.where((user) => 
-      !_chats.any((chat) => chat.participantIds.contains(user.id))
+      !_chats.any((chat) => _participantIds(chat).contains(user.id))
     ).toList();
 
     return ListView(
@@ -724,7 +771,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                 Icon(Icons.search_off, color: Colors.grey.shade700, size: 48),
                 const SizedBox(height: 16),
                 Text(
-                  _discoveredUsers.any((u) => _chats.any((c) => c.participantIds.contains(u.id)))
+                  _discoveredUsers.any((u) => _chats.any((c) => _participantIds(c).contains(u.id)))
                       ? 'User is already in your chats'
                       : 'No new users found for "$query"',
                   style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
@@ -741,8 +788,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
           ...discoveryResults.map((user) => ListTile(
             leading: CircleAvatar(
               backgroundColor: user.avatarColor != null ? Color(user.avatarColor!) : Colors.blue.shade300,
-              backgroundImage: user.profilePictureUrl != null ? CachedNetworkImageProvider(user.profilePictureUrl!) : null,
-              child: user.profilePictureUrl == null ? Text(user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '') : null,
+              backgroundImage: user.avatarUrl != null ? CachedNetworkImageProvider(user.avatarUrl!) : null,
+              child: user.avatarUrl == null ? Text(user.displayName.isNotEmpty ? user.displayName[0].toUpperCase() : '') : null,
             ),
             title: Text(user.displayName, style: const TextStyle(color: Colors.white)),
             subtitle: Text('@${user.username}', style: TextStyle(color: Colors.grey.shade500)),
@@ -763,12 +810,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
 
-  Widget _buildStoryItem(Chat chat) {
+  Widget _buildStoryItem(ChatSummary chat) {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChatScreen(chat: chat),
+            builder: (context) => ChatScreen(
+              chat: chat.chat,
+              otherProfile: chat.otherProfile,
+            ),
           ),
         );
       },
@@ -782,25 +832,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   padding: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 2),
+                    border: Border.all(color: Colors.blueAccent.withValues(alpha: 128), width: 2),
                   ),
                   child: CircleAvatar(
                     radius: 28,
-                    backgroundColor: chat.avatarColor != null 
-                        ? Color(chat.avatarColor!) 
+                    backgroundColor: _avatarColor(chat) != null 
+                        ? Color(_avatarColor(chat)!) 
                         : Colors.blue.shade300,
-                    backgroundImage: chat.profilePictureUrl != null
-                        ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+                    backgroundImage: _avatarUrl(chat) != null
+                        ? CachedNetworkImageProvider(_avatarUrl(chat)!)
                         : null,
-                    child: chat.profilePictureUrl == null
+                    child: _avatarUrl(chat) == null
                         ? Text(
-                            chat.displayName.isNotEmpty ? chat.displayName[0].toUpperCase() : '',
+                            _displayName(chat).isNotEmpty ? _displayName(chat)[0].toUpperCase() : '',
                             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                           )
                         : null,
                   ),
                 ),
-                if (chat.isActuallyOnline && _isConnected)
+                if (_isActuallyOnline(chat) && _isConnected)
                   Positioned(
                     bottom: 2,
                     right: 2,
@@ -814,19 +864,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                     ),
                   )
-                else if (chat.lastSeen != null && _isConnected)
+                else if (_lastSeen(chat) != null && _isConnected)
                   Positioned(
                     bottom: 0,
                     right: 0,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade800.withOpacity(0.9),
+                        color: Colors.grey.shade800.withValues(alpha: 230),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.black, width: 1.5),
                       ),
                       child: Text(
-                        _formatCompactDuration(chat.lastSeen),
+                        _formatCompactDuration(_lastSeen(chat)),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 9,
@@ -841,7 +891,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
             SizedBox(
               width: 60,
               child: Text(
-                chat.displayName.split(' ').first,
+                _shortDisplayName(chat),
                 textAlign: TextAlign.center,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -854,12 +904,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
 
-  Widget _buildChatItem(Chat chat) {
+  Widget _buildChatItem(ChatSummary chat) {
     return GestureDetector(
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => ChatScreen(chat: chat),
+            builder: (context) => ChatScreen(
+              chat: chat.chat,
+              otherProfile: chat.otherProfile,
+            ),
           ),
         );
       },
@@ -874,20 +927,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               children: [
                 CircleAvatar(
                   radius: 28,
-                  backgroundColor: chat.avatarColor != null 
-                      ? Color(chat.avatarColor!) 
+                  backgroundColor: _avatarColor(chat) != null 
+                      ? Color(_avatarColor(chat)!) 
                       : Colors.blue.shade300,
-                  backgroundImage: chat.profilePictureUrl != null
-                      ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+                  backgroundImage: _avatarUrl(chat) != null
+                      ? CachedNetworkImageProvider(_avatarUrl(chat)!)
                       : null,
-                  child: chat.profilePictureUrl == null
+                  child: _avatarUrl(chat) == null
                       ? Text(
-                          chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                          _displayName(chat).isNotEmpty ? _displayName(chat)[0].toUpperCase() : '',
                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
                         )
                       : null,
                 ),
-                if (chat.isActuallyOnline && _isConnected)
+                if (_isActuallyOnline(chat) && _isConnected)
                   Positioned(
                     bottom: 0,
                     right: 0,
@@ -901,19 +954,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                     ),
                   )
-                else if (chat.lastSeen != null && _isConnected)
+                else if (_lastSeen(chat) != null && _isConnected)
                   Positioned(
                     bottom: -2,
                     right: -2,
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade800.withOpacity(0.9),
+                        color: Colors.grey.shade800.withValues(alpha: 230),
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(color: Colors.black, width: 1.5),
                       ),
                       child: Text(
-                        _formatCompactDuration(chat.lastSeen),
+                        _formatCompactDuration(_lastSeen(chat)),
                         style: const TextStyle(
                           color: Colors.white70,
                           fontSize: 9,
@@ -933,7 +986,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                   Row(
                     children: [
                       Text(
-                        chat.displayName,
+                        _displayName(chat),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 16,
@@ -959,16 +1012,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                         child: Text(
                           (() {
                               String displayContent;
-                              if (chat.lastMessageContent == null) {
+                              if (_lastMessageContent(chat) == null) {
                                 displayContent = 'No Messages';
                               } else {
-                                final raw = chat.lastMessageContent!;
+                                final raw = _lastMessageContent(chat)!;
                                 final looksLikeAttachment = raw.trim().startsWith('[') && raw.trim().endsWith(']');
                                 if (looksLikeAttachment) {
-                                  final isMe = chat.lastMessageSenderId == _supabase.auth.currentUser?.id;
+                                  final isMe = _lastMessageSenderId(chat) == _supabase.auth.currentUser?.id;
                                   displayContent = isMe
                                       ? 'Sent an attachment'
-                                      : '${chat.displayName} sent an attachment';
+                                      : '${_displayName(chat)} sent an attachment';
                                 } else {
                                   try {
                                     displayContent = _encryptionService.decryptText(raw);
@@ -977,10 +1030,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                                   }
                                 }
                               }
-                              final isMe = chat.lastMessageSenderId == _supabase.auth.currentUser?.id;
-                              final senderLabel = chat.lastMessageContent != null ? isMe
+                              final isMe = _lastMessageSenderId(chat) == _supabase.auth.currentUser?.id;
+                              final senderLabel = _lastMessageContent(chat) != null ? isMe
                                   ? 'You: '
-                                  : (displayContent.contains('sent an attachment') ? '' : '${chat.displayName.split(' ').first}: ') : "";
+                                  : (displayContent.contains('sent an attachment') ? '' : '${_shortDisplayName(chat)}: ') : "";
                               final prefix = senderLabel;
                               return '$prefix$displayContent';
                             })(),
@@ -995,7 +1048,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        '· ${_formatMessageTimestamp(chat.lastMessageTime)}',
+                        '· ${_formatMessageTimestamp(_lastMessageTime(chat) ?? DateTime.now())}',
                          style: TextStyle(
                            color: chat.unreadCount > 0 ? Colors.blueAccent : Colors.grey, 
                            fontSize: 12,
@@ -1009,18 +1062,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
               ),
             ),
               // Push status indicator to the far right
-                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                      if (_lastMessageSenderId(chat) == _supabase.auth.currentUser?.id)
                         // const Spacer(),
                         // const Spacer(),
                       // Status indicator in the same row as message and time with constant width
-                      if (chat.lastMessageSenderId == _supabase.auth.currentUser?.id)
+                      if (_lastMessageSenderId(chat) == _supabase.auth.currentUser?.id)
                         SizedBox(
                           width: 55,
                           child: Align(
                             alignment: Alignment.centerRight,
-                            child: chat.lastMessageStatus == MessageStatus.read
+                            child: _lastMessageStatus(chat) == MessageStatus.read
                                 ? _buildReadReceiptAvatar(chat)
-                                : _buildMessageStatusIcon(chat.lastMessageStatus, chat),
+                                : _buildMessageStatusIcon(_lastMessageStatus(chat), chat),
                           ),
                         ),
             // Unread count badge for incoming messages
@@ -1080,13 +1133,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     }
   }
 
-  void _showDeleteChatConfirmation(Chat chat) async {
+  void _showDeleteChatConfirmation(ChatSummary chat) async {
     final bool? confirm = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text('Delete Chat'),
-          content: Text('Are you sure you want to delete your chat with ${chat.displayName}? This action cannot be undone.'),
+          content: Text('Are you sure you want to delete your chat with ${_displayName(chat)}? This action cannot be undone.'),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -1102,11 +1155,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
 
     if (confirm == true) {
-      _presenter?.deleteChat(chat.id);
+      _presenter?.deleteChat(chat.chat.id);
     }
   }
 
-  void _showChatOptions(Chat chat) {
+  void _showChatOptions(ChatSummary chat) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.black,
@@ -1120,7 +1173,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
                 title: const Text('Show as Bubble', style: TextStyle(color: Colors.white)),
                 onTap: () async {
                   Navigator.pop(context);
-                  await NotificationService.showBubbleForChat(chat);
+                  await NotificationService.showBubbleForChat(
+                    NotificationChat(
+                      id: chat.chat.id,
+                      displayName: _displayName(chat),
+                      avatarUrl: _avatarUrl(chat),
+                      avatarColor: _avatarColor(chat),
+                    ),
+                  );
                 },
               ),
               ListTile(
@@ -1138,7 +1198,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
 
-  Widget _buildMessageStatusIcon(MessageStatus? status, Chat chat) {
+  Widget _buildMessageStatusIcon(MessageStatus? status, ChatSummary chat) {
     if (status == null) return const SizedBox.shrink();
 
     if (status == MessageStatus.read) {
@@ -1158,6 +1218,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
       case MessageStatus.delivered:
         statusText = 'delivered';
         break;
+      case MessageStatus.failed:
+        statusText = 'failed';
+        textColor = Colors.redAccent;
+        break;
       default:
         return const SizedBox.shrink();
     }
@@ -1175,20 +1239,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver imp
     );
   }
 
-  Widget _buildReadReceiptAvatar(Chat chat) {
+  Widget _buildReadReceiptAvatar(ChatSummary chat) {
     return Padding(
       padding: const EdgeInsets.only(left: 1.0),
       child: CircleAvatar(
         radius: 10,
-        backgroundColor: chat.avatarColor != null 
-            ? Color(chat.avatarColor!) 
+        backgroundColor: _avatarColor(chat) != null 
+            ? Color(_avatarColor(chat)!) 
             : Colors.blue.shade300,
-        backgroundImage: chat.profilePictureUrl != null
-            ? CachedNetworkImageProvider(chat.profilePictureUrl!)
+        backgroundImage: _avatarUrl(chat) != null
+            ? CachedNetworkImageProvider(_avatarUrl(chat)!)
             : null,
-        child: chat.profilePictureUrl == null
+        child: _avatarUrl(chat) == null
             ? Text(
-                chat.displayName.isNotEmpty ? chat.displayName[0] : '',
+                _displayName(chat).isNotEmpty ? _displayName(chat)[0].toUpperCase() : '',
                 style: const TextStyle(
                   color: Colors.white, 
                   fontWeight: FontWeight.bold, 

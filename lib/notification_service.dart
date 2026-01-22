@@ -9,11 +9,39 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:my_chat_app/model/message.dart' as app_message;
-import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/services/encryption_service.dart';
 import 'package:my_chat_app/supabase_client.dart';
+import 'package:onesignal_flutter/onesignal_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
+class NotificationChat {
+  final String id;
+  final String displayName;
+  final String? avatarUrl;
+  final int? avatarColor;
+
+  const NotificationChat({
+    required this.id,
+    required this.displayName,
+    this.avatarUrl,
+    this.avatarColor,
+  });
+
+  NotificationChat copyWith({
+    String? id,
+    String? displayName,
+    String? avatarUrl,
+    int? avatarColor,
+  }) {
+    return NotificationChat(
+      id: id ?? this.id,
+      displayName: displayName ?? this.displayName,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      avatarColor: avatarColor ?? this.avatarColor,
+    );
+  }
+}
 
 /// A utility class for managing local notifications in the application.
 ///
@@ -34,10 +62,77 @@ class NotificationService {
   static String? _pendingNavigationChatId;
   static final StreamController<String> _navigationStreamController =
       StreamController<String>.broadcast();
+  static const String _oneSignalAppId = '204f61d7-6ff8-4944-adb3-a8b55af3afd1';
 
   static Stream<String> get navigationStream => _navigationStreamController.stream;
 
   static String? get currentActiveChatId => _activeChatId;
+
+  static Future<void> initOneSignal({
+    String appId = _oneSignalAppId,
+    bool requestPermission = true,
+  }) async {
+    OneSignal.Debug.setLogLevel(OSLogLevel.verbose);
+    OneSignal.initialize(appId);
+    OneSignal.Notifications.addClickListener((event) {
+      event.preventDefault();
+      final data = event.notification.additionalData;
+      final chatId = data?['chat_id'] ?? data?['chatid'];
+      if (chatId is String && chatId.isNotEmpty) {
+        setPendingNavigationChatId(chatId);
+      }
+    });
+    if (requestPermission) {
+      await OneSignal.Notifications.requestPermission(true);
+    }
+  }
+
+  static void loginToOneSignal(String externalUserId) {
+    OneSignal.login(externalUserId);
+  }
+
+  static void logoutFromOneSignal() {
+    OneSignal.logout();
+  }
+
+  static Future<void> sendPushNotification({
+    required List<String> recipientIds,
+    required String title,
+    required String body,
+    required Map<String, dynamic> data,
+  }) async {
+    if (recipientIds.isEmpty) return;
+    try {
+      final payloadData = <String, dynamic>{...data};
+      if (!payloadData.containsKey('message_body')) {
+        payloadData['message_body'] = body;
+      }
+      if (!payloadData.containsKey('sender_name') && title.isNotEmpty) {
+        payloadData['sender_name'] = title;
+      }
+      final session = SupabaseManager.client.auth.currentSession;
+      final accessToken = session?.accessToken ?? SupabaseManager.anonKey;
+      final headers = <String, String>{
+        'apikey': SupabaseManager.anonKey,
+        'Authorization': 'Bearer $accessToken',
+      };
+      final res = await Supabase.instance.client.functions.invoke(
+        'send_message_push',
+        headers: headers,
+        body: {
+          'recipient_ids': recipientIds,
+          'title': title,
+          'body': body,
+          'data': payloadData,
+        },
+      );
+      if (res.status != 200) {
+       log('Push failed: ${res.data}');
+      }
+    } catch (e) {
+      log('Notifications: push send failed: $e');
+    }
+  }
 
   static final EncryptionService _encryptionService = EncryptionService();
 
@@ -57,6 +152,18 @@ class NotificationService {
 
   static void setActiveChatId(String? chatId) {
     _activeChatId = chatId;
+    Future(() async {
+      try {
+        await ensureSupabaseInitialized();
+        final userId = SupabaseManager.client.auth.currentUser?.id;
+        if (userId == null) return;
+        await SupabaseManager.client.rpc('handle_user_status', params: {
+          'p_user_id': userId,
+          'p_online_status': true,
+          'p_active_chat_id': chatId,
+        });
+      } catch (_) {}
+    });
   }
 
   static void setPendingNavigationChatId(String? chatId) {
@@ -202,6 +309,16 @@ class NotificationService {
     });
   }
 
+  static Future<void> fetchInitialLaunchChatId() async {
+    try {
+      if (!Platform.isAndroid) return;
+      final String? chatId = await _bubbleChannel.invokeMethod('getLaunchChatId');
+      if (chatId != null && chatId.isNotEmpty) {
+        setPendingNavigationChatId(chatId);
+      }
+    } catch (_) {}
+  }
+
   static Future<bool> ensureAndroidNotificationsPermission() async {
     if (kIsWeb || !Platform.isAndroid) return true;
     final androidImpl = _flutterLocalNotificationsPlugin
@@ -257,30 +374,33 @@ class NotificationService {
         }
 
         try {
-          final chatData = await SupabaseManager.client
-              .from('chats')
-              .select()
-              .eq('id', message.chatId)
-              .single();
-
-          final chat = Chat.fromMap(chatData);
-
           Map<String, dynamic>? senderProfile;
           try {
+            final senderId = message.senderId;
+            if (senderId == null) {
+              return;
+            }
             senderProfile = await SupabaseManager.client
                 .from('profiles')
                 .select()
-                .eq('id', message.senderId)
+                .eq('id', senderId)
                 .single();
           } catch (e) {
             log('Notifications: failed to load sender profile: $e');
           }
 
-          final updatedChat = chat.copyWith(
-            displayName: senderProfile?['display_name'] ?? chat.displayName,
-            profilePictureUrl:
-                senderProfile?['profile_picture_url'] ?? chat.profilePictureUrl,
-            isOnline: senderProfile?['is_online'] ?? false,
+          final String displayName =
+              senderProfile?['display_name'] as String? ?? 'Unknown';
+          final String? avatarUrl =
+              senderProfile?['avatar_url'] as String? ??
+                  senderProfile?['profile_picture_url'] as String?;
+          final int? avatarColor = senderProfile?['avatar_color'] as int?;
+
+          final updatedChat = NotificationChat(
+            id: message.chatId,
+            displayName: displayName,
+            avatarUrl: avatarUrl,
+            avatarColor: avatarColor,
           );
 
           log(
@@ -337,88 +457,6 @@ class NotificationService {
   }
 
 
-  static Future<void> showTestNotification() async {
-    try {
-      final now = DateTime.now();
-      final title = 'Ma';
-      const body = 'Hi';
-
-      final avatar = await _buildInitialsAvatarData('Ma');
-      final Person sender = Person(
-        name: 'Ma',
-        key: 'lozo_test_sender',
-        icon: avatar.icon as dynamic,
-      );
-      final MessagingStyleInformation messagingStyle = MessagingStyleInformation(
-        sender,
-        groupConversation: false,
-        messages: <Message>[
-          Message('Hi', now, sender),
-        ],
-      );
-
-      final androidDetails = AndroidNotificationDetails(
-        'lozo_test_channel_v1',
-        'LoZo Test',
-        channelDescription: 'Test notifications to validate system delivery',
-        importance: Importance.max,
-        priority: Priority.high,
-        icon: 'ic_stat_lozo',
-        category: AndroidNotificationCategory.message,
-        shortcutId: 'lozo_test_chat',
-        styleInformation: messagingStyle,
-        enableLights: true,
-        enableVibration: true,
-        vibrationPattern: Int64List.fromList(<int>[0, 250, 120, 250]),
-        playSound: true,
-        channelShowBadge: true,
-        visibility: NotificationVisibility.public,
-        onlyAlertOnce: false,
-        autoCancel: true,
-        largeIcon: avatar.bitmap,
-        showWhen: true,
-        when: now.millisecondsSinceEpoch,
-        subText: 'Messages',
-        actions: <AndroidNotificationAction>[
-          AndroidNotificationAction(
-            'test_mark_read_action',
-            'Mark as read',
-            cancelNotification: true,
-            showsUserInterface: false,
-          ),
-          AndroidNotificationAction(
-            'test_reply_action',
-            'Reply',
-            inputs: <AndroidNotificationActionInput>[
-              AndroidNotificationActionInput(label: 'Reply'),
-            ],
-            showsUserInterface: true,
-          ),
-        ],
-      );
-
-      const iOSDetails = DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      );
-
-      await _flutterLocalNotificationsPlugin.show(
-        _testImmediateNotificationId,
-        title,
-        body,
-        NotificationDetails(android: androidDetails, iOS: iOSDetails),
-        payload: jsonEncode({
-          'chat_id': 'lozo_test_chat',
-          'message_id': 'lozo_test_message',
-          'sender_id': 'lozo_test_sender',
-        }),
-      );
-      log('Notifications: test notification shown');
-    } catch (e) {
-      log('Notifications: test notification failed: $e');
-    }
-  }
 
   /// Ensures that Supabase is initialized.
   ///
@@ -463,7 +501,7 @@ class NotificationService {
   ///
   /// [message] The message object to display in the notification.
   /// [chat] The chat object associated with the message.
-  static Future<void> showMessageNotification(app_message.Message message, Chat chat) async {
+  static Future<void> showMessageNotification(app_message.Message message, NotificationChat chat) async {
     final int notificationId = chat.id.hashCode;
     final seenForChat =
         _chatSeenMessageIds.putIfAbsent(chat.id, () => <String>{});
@@ -486,7 +524,7 @@ class NotificationService {
 
     final String notificationBody = _notificationBodyFor(message);
 
-    final avatar = await _getAvatarForChat(chat.profilePictureUrl, senderName, avatarColor: chat.avatarColor);
+    final avatar = await _getAvatarForChat(chat.avatarUrl, senderName, avatarColor: chat.avatarColor);
     
     if (Platform.isAndroid) {
       await _showBubble(
@@ -494,6 +532,7 @@ class NotificationService {
         senderName,
         notificationBody,
         avatarPath: avatar.filePath,
+        autoExpand: false,
       );
       return;
     }
@@ -584,7 +623,7 @@ class NotificationService {
       'sender_id': message.senderId,
       'sender_name': senderName,
       'message_body': notificationBody,
-      'sender_profile_url': chat.profilePictureUrl,
+      'sender_profile_url': chat.avatarUrl,
       'sender_avatar_color': chat.avatarColor,
     });
 
@@ -607,7 +646,7 @@ class NotificationService {
   /// Manually triggers a bubble notification for a specific chat.
   ///
   /// This is used by the "Show as Bubble" UI action.
-  static Future<void> showBubbleForChat(Chat chat) async {
+  static Future<void> showBubbleForChat(NotificationChat chat) async {
     final String senderName = chat.displayName;
     String body = 'Tap to chat';
     try {
@@ -623,8 +662,14 @@ class NotificationService {
         body = _notificationBodyFor(m);
       }
     } catch (_) {}
-    final avatarData = await _getAvatarForChat(chat.profilePictureUrl, senderName, avatarColor: chat.avatarColor);
-    await _showBubble(chat.id, senderName, body, avatarPath: avatarData.filePath);
+    final avatarData = await _getAvatarForChat(chat.avatarUrl, senderName, avatarColor: chat.avatarColor);
+    await _showBubble(
+      chat.id,
+      senderName,
+      body,
+      avatarPath: avatarData.filePath,
+      autoExpand: true,
+    );
   }
 
   /// Handles notification responses when the app is in the foreground or background.
@@ -726,6 +771,7 @@ class NotificationService {
         senderName ?? 'Messages',
         messageBody ?? 'Tap to chat',
         avatarPath: avatarPath,
+        autoExpand: true,
       );
 
       log(
@@ -756,6 +802,12 @@ class NotificationService {
       await _bubbleChannel.invokeMethod('requestBubblePermission');
     } catch (_) {}
   }
+  static Future<bool> canDrawOverlays() async {
+    return false;
+  }
+  static Future<void> requestOverlayPermission() async {
+    return;
+  }
   static Future<bool> _maybeOpenBubbleSettings() async {
     try {
       if (!Platform.isAndroid) return false;
@@ -770,7 +822,13 @@ class NotificationService {
     return false;
   }
 
-  static Future<void> _showBubble(String chatId, String title, String body, {String? avatarPath}) async {
+  static Future<void> _showBubble(
+    String chatId,
+    String title,
+    String body, {
+    String? avatarPath,
+    bool autoExpand = false,
+  }) async {
     try {
       if (!Platform.isAndroid) return;
       // We don't check _canShowBubbles() or open settings here anymore,
@@ -780,6 +838,7 @@ class NotificationService {
         'title': title,
         'body': body,
         'avatar_path': avatarPath,
+        'auto_expand': autoExpand,
       });
     } on PlatformException catch (e) {
       log(
@@ -788,6 +847,40 @@ class NotificationService {
       );
     } catch (e) {
       log('Notifications: bubble show failed: $e');
+    }
+  }
+  static Future<void> hideBubble() async {
+    try {
+      if (!Platform.isAndroid) return;
+      await _bubbleChannel.invokeMethod('hideBubble');
+    } on PlatformException catch (e) {
+      log(
+        'Notifications: bubble hide failed '
+        'code=${e.code} message=${e.message} details=${e.details}',
+      );
+    } catch (e) {
+      log('Notifications: bubble hide failed: $e');
+    }
+  }
+  static Future<void> updateBubbleData({
+    String? chatId,
+    String? title,
+    String? body,
+  }) async {
+    try {
+      if (!Platform.isAndroid) return;
+      await _bubbleChannel.invokeMethod('updateBubbleData', <String, dynamic>{
+        'chat_id': chatId,
+        'title': title,
+        'body': body,
+      });
+    } on PlatformException catch (e) {
+      log(
+        'Notifications: bubble update failed '
+        'code=${e.code} message=${e.message} details=${e.details}',
+      );
+    } catch (e) {
+      log('Notifications: bubble update failed: $e');
     }
   }
 
@@ -857,8 +950,9 @@ class NotificationService {
   }
 
   static Future<_AvatarData> _getAvatarForChat(String? url, String senderName, {int? avatarColor}) async {
+    final normalizedColor = _normalizeAvatarColorValue(avatarColor);
     if (url == null || url.isEmpty) {
-      return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
+      return _buildInitialsAvatarData(senderName, colorValue: normalizedColor);
     }
 
     final cached = _avatarUrlToFilePath[url];
@@ -877,12 +971,12 @@ class NotificationService {
       final file = File(filePath);
 
       final uri = Uri.tryParse(url);
-      if (uri == null) return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
+      if (uri == null) return _buildInitialsAvatarData(senderName, colorValue: normalizedColor);
 
       final request = await HttpClient().getUrl(uri);
       final response = await request.close();
       if (response.statusCode != 200) {
-        return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
+        return _buildInitialsAvatarData(senderName, colorValue: normalizedColor);
       }
 
       final bytes = await consolidateHttpClientResponseBytes(response);
@@ -894,7 +988,7 @@ class NotificationService {
         filePath: filePath,
       );
     } catch (_) {
-      return _buildInitialsAvatarData(senderName, colorValue: avatarColor);
+      return _buildInitialsAvatarData(senderName, colorValue: normalizedColor);
     }
   }
 
@@ -936,13 +1030,22 @@ class NotificationService {
     return trimmed.substring(0, 1).toUpperCase();
   }
 
+  static int? _normalizeAvatarColorValue(int? value) {
+    if (value == null) return null;
+    if (value >= 0 && value <= 0x00FFFFFF) {
+      return value | 0xFF000000;
+    }
+    return value;
+  }
+
   static Future<Uint8List> _renderInitialAvatarPngBytes(String initial, {int? colorValue}) async {
     const int size = 256;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     
     // Use provided color or fallback to blue (same as HomeScreen fallback logic essentially)
-    final color = colorValue != null ? Color(colorValue) : const Color(0xFF2F80ED); // Colors.blue.shade300 is roughly similar but let's stick to this or match exactly if user wants. User said "same it". 
+    final normalizedColor = _normalizeAvatarColorValue(colorValue);
+    final color = normalizedColor != null ? Color(normalizedColor) : const Color(0xFF2F80ED);
     // HomeScreen uses Colors.blue.shade300 if null. 0xFF2F80ED is standard blue.
     // Let's use Colors.blue.shade300 value if we want to be exact? 
     // Colors.blue.shade300 is Color(0xFF64B5F6).
@@ -981,19 +1084,36 @@ class NotificationService {
     return byteData.buffer.asUint8List();
   }
 
+  static String buildNotificationBody(
+    app_message.Message message, {
+    String? plainText,
+  }) {
+    if (message.isDeleted) return 'Message deleted';
+    if (message.type == app_message.MessageType.text) {
+      if (plainText != null && plainText.isNotEmpty) {
+        return plainText;
+      }
+      return _notificationBodyFor(message);
+    }
+    if (message.type == app_message.MessageType.image) return 'Photo';
+    if (message.type == app_message.MessageType.audio) return 'Voice message';
+    return 'New message';
+  }
+
   static String _notificationBodyFor(app_message.Message message) {
-    if (message.deleted) return 'Message deleted';
+    if (message.isDeleted) return 'Message deleted';
 
     if (message.type == app_message.MessageType.text) {
+      final content = message.content ?? '';
       try {
-        return _encryptionService.decryptText(message.content);
+        return _encryptionService.decryptText(content);
       } catch (_) {
-        return message.content;
+        return content;
       }
     }
 
     if (message.type == app_message.MessageType.image) return 'Photo';
-    if (message.type == app_message.MessageType.voice) return 'Voice message';
+    if (message.type == app_message.MessageType.audio) return 'Voice message';
     return 'New message';
   }
 }

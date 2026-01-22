@@ -13,7 +13,6 @@
 
     <application
         android:label="LoZo"
-        android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true">
@@ -27,6 +26,11 @@
             android:windowSoftInputMode="adjustResize"
             android:allowEmbedded="true"
             android:resizeableActivity="true">
+            
+            <property 
+                android:name="android.window.PROPERTY_SUPPORTS_MULTI_INSTANCE_SYSTEM_UI" 
+                android:value="true" />
+
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
@@ -44,29 +48,42 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-
         <activity
             android:name=".BubbleActivity"
-            android:exported="true"
-            android:launchMode="singleTop"
-            android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-            android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize"
             android:allowEmbedded="true"
+            android:documentLaunchMode="always"
+            android:exported="true"
             android:resizeableActivity="true"
-            android:documentLaunchMode="always">
-            <meta-data
-              android:name="io.flutter.embedding.android.NormalTheme"
-              android:resource="@style/NormalTheme"
-              />
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="https"
+                    android:host="lozo.chat"
+                    android:pathPattern="/chat/*" />
+            </intent-filter>
         </activity>
+
+        <meta-data
+            android:name="onesignal_app_id"
+            android:value="204f61d7-6ff8-4944-adb3-a8b55af3afd1" />
+        <meta-data
+            android:name="com.onesignal.NotificationServiceExtension"
+            android:value="com.example.my_chat_app.ChatNotificationService" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
         
+        <receiver
+            android:name=".NotificationActionReceiver"
+            android:exported="false" />
+
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="dataSync"

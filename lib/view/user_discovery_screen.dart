@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:my_chat_app/model/user.dart';
+import 'package:my_chat_app/model/profile.dart';
 import 'package:my_chat_app/presenter/user_discovery_presenter.dart';
 import 'package:my_chat_app/view/user_discovery_view.dart';
-import 'package:my_chat_app/model/relationship.dart'; // New import
+import 'package:my_chat_app/model/user_relationship.dart'; // New import
 import 'package:my_chat_app/view/relationship_selection_dialog.dart'; // New import
 import 'package:my_chat_app/utils/toast_utils.dart';
 
@@ -17,7 +17,7 @@ class UserDiscoveryScreen extends StatefulWidget {
 class _UserDiscoveryScreenState extends State<UserDiscoveryScreen> implements UserDiscoveryView {
   late UserDiscoveryPresenter _presenter;
   final TextEditingController _searchController = TextEditingController();
-  List<User> _searchResults = [];
+  List<Profile> _searchResults = [];
   bool _isLoading = false;
 
   @override
@@ -52,7 +52,7 @@ class _UserDiscoveryScreenState extends State<UserDiscoveryScreen> implements Us
   }
 
   @override
-  void displaySearchResults(List<User> users) {
+  void displaySearchResults(List<Profile> users) {
     setState(() {
       _searchResults = users;
     });
@@ -100,10 +100,10 @@ class _UserDiscoveryScreenState extends State<UserDiscoveryScreen> implements Us
                           margin: const EdgeInsets.symmetric(vertical: 8.0),
                           child: ListTile(
                             leading: CircleAvatar(
-                              backgroundImage: user.profilePictureUrl != null
-                                  ? CachedNetworkImageProvider(user.profilePictureUrl!)
+                              backgroundImage: user.avatarUrl != null
+                                  ? CachedNetworkImageProvider(user.avatarUrl!)
                                   : null,
-                              child: user.profilePictureUrl == null
+                              child: user.avatarUrl == null
                                   ? const Icon(Icons.person)
                                   : null,
                             ),

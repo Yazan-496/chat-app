@@ -23,12 +23,37 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.FlutterEngineCache
+import io.flutter.embedding.engine.dart.DartExecutor
 import io.flutter.plugin.common.MethodChannel
+
+import android.view.KeyEvent
+import android.view.KeyboardShortcutGroup
+import android.view.KeyboardShortcutInfo
+import android.view.Menu
 
 open class MainActivity : FlutterActivity() {
     private val channelName = "com.example.my_chat_app/bubbles"
-    private lateinit var methodChannel: MethodChannel
+    private var methodChannel: MethodChannel? = null
     private val messagesChannelId = "messages_channel_v7"
+    private var lastBubbleChatId: String? = null
+
+    override fun provideFlutterEngine(context: Context): FlutterEngine {
+        return getOrCreateEngine(context)
+    }
+
+    override fun onProvideKeyboardShortcuts(
+        data: MutableList<KeyboardShortcutGroup>?,
+        menu: Menu?,
+        deviceId: Int
+    ) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val shortcuts = ArrayList<KeyboardShortcutInfo>()
+            shortcuts.add(KeyboardShortcutInfo("Send Message", KeyEvent.KEYCODE_ENTER, 0))
+            data?.add(KeyboardShortcutGroup("Chat", shortcuts))
+        }
+        super.onProvideKeyboardShortcuts(data, menu, deviceId)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -37,11 +62,15 @@ open class MainActivity : FlutterActivity() {
         ensureMessagesChannel()
 
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
-        methodChannel.setMethodCallHandler { call, result ->
+        methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getLaunchChatId" -> {
                     val chatId = intent?.getStringExtra("chat_id") ?: intent?.getStringExtra("chatid") ?: ""
                     result.success(chatId)
+                }
+                "isBubble" -> {
+                    val fromBubble = intent?.getBooleanExtra("from_bubble", false) ?: false
+                    result.success(fromBubble)
                 }
                 "showBubble" -> {
                     try {
@@ -49,11 +78,50 @@ open class MainActivity : FlutterActivity() {
                         val chatId = (args?.get("chat_id") as? String).orEmpty()
                         val title = (args?.get("title") as? String).orEmpty()
                         val body = (args?.get("body") as? String).orEmpty()
-                        val avatarPath = (args?.get("avatar_path") as? String)
-                        showBubbleNotification(chatId, title, body, avatarPath)
+                        val avatarPath = args?.get("avatar_path") as? String
+                        val autoExpand = (args?.get("auto_expand") as? Boolean) ?: false
+                        if (chatId.isBlank()) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+                        showBubbleNotification(chatId, title, body, avatarPath, autoExpand)
+                        lastBubbleChatId = chatId
                         result.success(true)
                     } catch (e: Exception) {
                         Log.e("LoZoBubble", "showBubble failed", e)
+                        result.error("BUBBLE_ERROR", e.message, null)
+                    }
+                }
+                "hideBubble" -> {
+                    try {
+                        val chatId = lastBubbleChatId.orEmpty()
+                        if (chatId.isBlank()) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+                        NotificationManagerCompat.from(this).cancel(chatId.hashCode())
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("LoZoBubble", "hideBubble failed", e)
+                        result.error("BUBBLE_ERROR", e.message, null)
+                    }
+                }
+                "updateBubbleData" -> {
+                    try {
+                        val args = call.arguments as? Map<*, *>
+                        val chatIdArg = (args?.get("chat_id") as? String).orEmpty()
+                        val title = (args?.get("title") as? String).orEmpty()
+                        val body = (args?.get("body") as? String).orEmpty()
+                        val chatId = if (chatIdArg.isNotBlank()) chatIdArg else lastBubbleChatId.orEmpty()
+                        if (chatId.isBlank()) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+                        showBubbleNotification(chatId, title, body, null, false, true)
+                        lastBubbleChatId = chatId
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("LoZoBubble", "updateBubbleData failed", e)
                         result.error("BUBBLE_ERROR", e.message, null)
                     }
                 }
@@ -64,6 +132,9 @@ open class MainActivity : FlutterActivity() {
                         Log.e("LoZoBubble", "canShowBubbles failed", e)
                         result.success(false)
                     }
+                }
+                "canDrawOverlays" -> {
+                    result.success(false)
                 }
                 "moveTaskToBack" -> {
                     moveTaskToBack(true)
@@ -80,8 +151,25 @@ open class MainActivity : FlutterActivity() {
                     requestBubblePermission()
                     result.success(true)
                 }
+                "requestOverlayPermission" -> {
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    companion object {
+        private const val ENGINE_ID = "main_engine"
+
+        fun getOrCreateEngine(context: Context): FlutterEngine {
+            val cache = FlutterEngineCache.getInstance()
+            val cached = cache.get(ENGINE_ID)
+            if (cached != null) return cached
+            val engine = FlutterEngine(context.applicationContext)
+            engine.dartExecutor.executeDartEntrypoint(DartExecutor.DartEntrypoint.createDefault())
+            cache.put(ENGINE_ID, engine)
+            return engine
         }
     }
 
@@ -219,7 +307,7 @@ open class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun showBubbleNotification(chatId: String, title: String, body: String, avatarPath: String?) {
+    private fun showBubbleNotification(chatId: String, title: String, body: String, avatarPath: String?, autoExpand: Boolean, suppressNotification: Boolean = false) {
         if (chatId.isBlank()) return
         ensureMessagesChannel()
 
@@ -229,9 +317,12 @@ open class MainActivity : FlutterActivity() {
         ensureConversationShortcut(chatId, title, avatarPath)
 
         val intent = Intent(this, BubbleActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            data = Uri.parse("https://lozo.chat/chat/$chatId")
             putExtra("chat_id", chatId)
             putExtra("chatid", chatId)
-            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra("from_bubble", true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         }
 
         val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -251,16 +342,18 @@ open class MainActivity : FlutterActivity() {
 
         val bubbleMeta = NotificationCompat.BubbleMetadata.Builder(pendingIntent, bubbleIcon)
             .setDesiredHeight(800)
-            .setAutoExpandBubble(false) // Don't auto-expand; let user tap.
-            .setSuppressNotification(appAllowed) // Suppress HUN if bubbles are allowed globally.
+            .setAutoExpandBubble(autoExpand)
+            .setSuppressNotification(appAllowed || suppressNotification)
             .build()
 
         val personBuilder = Person.Builder().setName(title.ifBlank { "Messages" })
-        if (!avatarPath.isNullOrBlank()) {
-             try {
-                 val icon = IconCompat.createWithBitmap(BitmapFactory.decodeFile(avatarPath))
-                 personBuilder.setIcon(icon)
-             } catch (_: Exception) {}
+        val personIcon = if (!avatarPath.isNullOrBlank()) {
+            createAdaptiveIcon(avatarPath!!)
+        } else {
+            null
+        }
+        if (personIcon != null) {
+            personBuilder.setIcon(personIcon)
         }
         val person = personBuilder.build()
 
@@ -279,11 +372,16 @@ open class MainActivity : FlutterActivity() {
             .setLocusId(LocusIdCompat(chatId))
             .setStyle(messagingStyle)
             .setBubbleMetadata(bubbleMeta)
-            .build()
+            
+        if (suppressNotification) {
+            notification.setOnlyAlertOnce(true)
+        }
+
+        val builtNotification = notification.build()
 
         try {
-            NotificationManagerCompat.from(this).notify(chatId.hashCode(), notification)
-            Log.d("LoZoBubble", "Bubble posted chatId=$chatId title=$title sdk=${Build.VERSION.SDK_INT} bubblesAllowed=$appAllowed")
+            NotificationManagerCompat.from(this).notify(chatId.hashCode(), builtNotification)
+            Log.d("LoZoBubble", "Bubble posted chatId=$chatId title=$title sdk=${Build.VERSION.SDK_INT} bubblesAllowed=$appAllowed suppressed=$suppressNotification")
         } catch (e: Exception) {
             Log.e(
                 "LoZoBubble",
@@ -299,11 +397,13 @@ open class MainActivity : FlutterActivity() {
             if (!ShortcutManagerCompat.isRequestPinShortcutSupported(this)) {
                 // Still OK; dynamic shortcuts can work even if pin not supported.
             }
-            val shortcutIntent = Intent(this, MainActivity::class.java).apply {
+            val shortcutIntent = Intent(this, BubbleActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
+                data = Uri.parse("https://lozo.chat/chat/$chatId")
                 putExtra("chat_id", chatId)
                 putExtra("chatid", chatId)
-                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("from_bubble", true)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             }
 
             var icon = IconCompat.createWithResource(this, R.mipmap.ic_launcher)
@@ -329,6 +429,7 @@ open class MainActivity : FlutterActivity() {
                 .setPerson(person)
                 .build()
 
+            ShortcutManagerCompat.removeDynamicShortcuts(this, listOf(chatId))
             ShortcutManagerCompat.pushDynamicShortcut(this, shortcut)
         } catch (e: Exception) {
             Log.e("LoZoBubble", "ensureConversationShortcut failed chatId=$chatId", e)
@@ -353,9 +454,15 @@ open class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (intent.getBooleanExtra("from_bubble", false)) {
+            return
+        }
+        if (intent.action == Intent.ACTION_MAIN) {
+            return
+        }
         val chatId = intent.getStringExtra("chat_id") ?: intent.getStringExtra("chatid") ?: ""
         try {
-            methodChannel.invokeMethod("onLaunchChatId", mapOf("chat_id" to chatId))
+            methodChannel?.invokeMethod("onLaunchChatId", mapOf("chat_id" to chatId))
         } catch (_: Exception) {}
     }
 

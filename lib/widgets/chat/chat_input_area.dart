@@ -90,7 +90,7 @@ class _ChatInputAreaState extends State<ChatInputArea> {
               color: Colors.grey.shade900,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 51),
                   blurRadius: 4,
                   offset: const Offset(0, -2),
                 ),
@@ -167,7 +167,7 @@ class _ChatInputAreaState extends State<ChatInputArea> {
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.1),
+                  color: Colors.white.withValues(alpha: 26),
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: Row(

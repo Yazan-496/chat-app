@@ -1,9 +1,9 @@
-import 'package:my_chat_app/model/user.dart';
+import 'package:my_chat_app/model/profile.dart';
 
 abstract class UserDiscoveryView {
   void showLoading();
   void hideLoading();
   void showMessage(String message);
-  void displaySearchResults(List<User> users);
+  void displaySearchResults(List<Profile> users);
   void updateView();
 }

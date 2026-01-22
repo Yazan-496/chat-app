@@ -2,13 +2,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/presenter/settings_presenter.dart';
 import 'package:my_chat_app/utils/app_theme.dart';
-import 'package:my_chat_app/main.dart';
 import 'package:my_chat_app/view/settings_view.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/services/local_storage_service.dart';
-import 'package:flutter/services.dart';
 import 'package:my_chat_app/notification_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
@@ -299,7 +297,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                             onChanged: (value) {
                               NotificationService.openBubbleSettings();
                             },
-                            activeColor: Colors.blueAccent,
+                            activeThumbColor: Colors.blueAccent,
                           ),
                           onTap: () {
                              NotificationService.openBubbleSettings();
@@ -341,7 +339,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           ),
           if (_isLoading)
             Container(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 128),
               child: const Center(
                 child: CircularProgressIndicator(color: Colors.blueAccent),
               ),
@@ -370,7 +368,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: (iconColor ?? Colors.blueAccent).withOpacity(0.1),
+            color: (iconColor ?? Colors.blueAccent).withValues(alpha: 26),
             shape: BoxShape.circle,
           ),
           child: Icon(icon, color: iconColor ?? Colors.blueAccent, size: 24),
@@ -471,7 +469,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
                     _currentAvatarColor = tempColor;
                   });
                   // Save to Supabase - ensure alpha is 255
-                  final colorToSave = tempColor.withAlpha(255).value;
+                  final colorToSave = tempColor.withAlpha(255).toARGB32();
                   await _userRepository.updateAvatarColor(userId, colorToSave);
                   // Notify presenter to refresh any dependent views
                   _presenter.updateView(); 

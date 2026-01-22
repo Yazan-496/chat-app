@@ -1,12 +1,12 @@
-import 'package:my_chat_app/model/user.dart';
-import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/model/profile.dart';
+import 'package:my_chat_app/model/user_relationship.dart';
 
 abstract class ProfileView {
   void showLoading();
   void hideLoading();
   void showMessage(String message);
-  void displayUserProfile(User user);
-  void displayRelationship(Relationship? relationship); // New method
+  void displayUserProfile(Profile user);
+  void displayRelationship(UserRelationship? relationship); // New method
   void navigateBack();
   void navigateToSignIn();
   void updateView();

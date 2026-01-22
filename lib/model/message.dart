@@ -1,105 +1,162 @@
-import 'dart:convert';
-import 'package:isar/isar.dart';
-import 'package:my_chat_app/utils/isar_utils.dart';
+enum MessageType {
+  text,
+  image,
+  audio,
+  file,
+  system,
+}
 
-part 'message.g.dart';
-
-@enumerated
 enum MessageStatus {
   sending,
   sent,
   delivered,
   read,
+  failed,
 }
 
-@enumerated
-enum MessageType {
-  text,
-  voice,
-  image,
-}
-
-@collection
-class Message {
-  Id get isarId => fastHash(id);
-
-  @Index(unique: true, replace: true)
-  final String id;
-  
-  @Index()
-  final String chatId;
-  
-  final String senderId;
-  final String receiverId;
-  
-  @enumerated
-  final MessageType type;
-  
-  final String content; // Encrypted for text, URL for media
-  
-  @Index()
-  final DateTime timestamp;
-  
-  @enumerated
-  MessageStatus status;
-  
-  final String? replyToMessageId;
-  final String? editedContent;
-  
-  @ignore
-  Map<String, String> reactions; // userId: emoji
-
-  String? get reactionsRaw => jsonEncode(reactions);
-  set reactionsRaw(String? value) {
-    if (value != null && value.isNotEmpty) {
-      try {
-        reactions = Map<String, String>.from(jsonDecode(value));
-      } catch (_) {
-        reactions = {};
-      }
-    } else {
-      reactions = {};
+extension MessageStatusJson on MessageStatus {
+  String toJson() {
+    switch (this) {
+      case MessageStatus.sending:
+        return 'sending';
+      case MessageStatus.sent:
+        return 'sent';
+      case MessageStatus.delivered:
+        return 'delivered';
+      case MessageStatus.read:
+        return 'read';
+      case MessageStatus.failed:
+        return 'failed';
     }
   }
-  
-  final bool deleted;
+
+  static MessageStatus fromJson(String? value) {
+    switch (value?.toLowerCase()) {
+      case 'sending':
+        return MessageStatus.sending;
+      case 'failed':
+        return MessageStatus.failed;
+      case 'delivered':
+        return MessageStatus.delivered;
+      case 'read':
+        return MessageStatus.read;
+      case 'sent':
+      default:
+        return MessageStatus.sent;
+    }
+  }
+}
+
+extension MessageTypeJson on MessageType {
+  String toJson() {
+    switch (this) {
+      case MessageType.text:
+        return 'TEXT';
+      case MessageType.image:
+        return 'IMAGE';
+      case MessageType.audio:
+        return 'AUDIO';
+      case MessageType.file:
+        return 'FILE';
+      case MessageType.system:
+        return 'SYSTEM';
+    }
+  }
+
+  static MessageType fromJson(String? value) {
+    switch (value?.toUpperCase()) {
+      case 'IMAGE':
+        return MessageType.image;
+      case 'AUDIO':
+        return MessageType.audio;
+      case 'FILE':
+        return MessageType.file;
+      case 'SYSTEM':
+        return MessageType.system;
+      case 'TEXT':
+      default:
+        return MessageType.text;
+    }
+  }
+}
+
+DateTime? _parseDateTime(String? value) {
+  if (value == null || value.isEmpty) {
+    return null;
+  }
+  return DateTime.tryParse(value);
+}
+
+Map<String, String> _parseReactions(dynamic value) {
+  if (value is Map) {
+    return value.map(
+      (key, val) => MapEntry(key.toString(), val?.toString() ?? ''),
+    );
+  }
+  if (value is List) {
+    final reactions = <String, String>{};
+    for (final item in value) {
+      if (item is Map) {
+        final userId = item['user_id']?.toString();
+        final emoji = item['emoji']?.toString();
+        if (userId != null && emoji != null && emoji.isNotEmpty) {
+          reactions[userId] = emoji;
+        }
+      }
+    }
+    return reactions;
+  }
+  return {};
+}
+
+class Message {
+  final String id;
+  final String chatId;
+  final String? senderId;
+  final String? content;
+  final MessageType type;
+  final String? replyToMessageId;
+  final Map<String, String> reactions;
+  final MessageStatus status;
+  final bool isEdited;
+  final bool isDeleted;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   Message({
     required this.id,
     required this.chatId,
-    required this.senderId,
-    required this.receiverId,
-    required this.type,
-    required this.content,
-    required this.timestamp,
-    this.status = MessageStatus.sending,
+    this.senderId,
+    this.content,
+    this.type = MessageType.text,
     this.replyToMessageId,
-    this.editedContent,
     this.reactions = const {},
-    this.deleted = false,
+    this.status = MessageStatus.sent,
+    this.isEdited = false,
+    this.isDeleted = false,
+    this.createdAt,
+    this.updatedAt,
   });
 
   factory Message.fromMap(Map<String, dynamic> data) {
     return Message(
       id: data['id'] as String? ?? '',
       chatId: data['chat_id'] as String? ?? '',
-      senderId: data['sender_id'] as String? ?? '',
-      receiverId: data['receiver_id'] as String? ?? '',
-      type: MessageType.values.firstWhere(
-          (e) => e.toString() == 'MessageType.' + (data['type'] as String? ?? 'text'),
-          orElse: () => MessageType.text),
-      content: data['content'] as String? ?? '',
-      timestamp: data['timestamp'] != null 
-          ? (DateTime.tryParse(data['timestamp'].toString())?.toUtc() ?? DateTime.now().toUtc()) 
-          : DateTime.now().toUtc(),
-      status: MessageStatus.values.firstWhere(
-          (e) => e.toString() == 'MessageStatus.' + (data['status'] as String? ?? 'sent'),
-          orElse: () => MessageStatus.sent),
+      senderId: data['sender_id'] as String?,
+      content: data['content'] as String?,
+      type: MessageTypeJson.fromJson(data['type'] as String?),
       replyToMessageId: data['reply_to_message_id'] as String?,
-      editedContent: data['edited_content'] as String?,
-      reactions: Map<String, String>.from(data['reactions'] as Map? ?? {}),
-      deleted: (data['deleted'] as bool?) ?? false,
+      reactions: _parseReactions(data['message_reactions'] ?? data['reactions']),
+      status: MessageStatusJson.fromJson(data['status'] as String?),
+      isEdited: data['is_edited'] as bool? ?? false,
+      isDeleted: data['is_deleted'] as bool? ?? false,
+      createdAt: _parseDateTime(data['created_at']?.toString()),
+      updatedAt: _parseDateTime(data['updated_at']?.toString()),
     );
+  }
+
+  factory Message.fromJson(Map<String, dynamic> json) {
+    return Message.fromMap(json);
   }
 
   Map<String, dynamic> toMap() {
@@ -107,38 +164,47 @@ class Message {
       'id': id,
       'chat_id': chatId,
       'sender_id': senderId,
-      'receiver_id': receiverId,
-      'type': type.toString().split('.').last,
       'content': content,
-      'timestamp': timestamp.toIso8601String(),
-      'status': status.toString().split('.').last,
+      'type': type.toJson(),
       'reply_to_message_id': replyToMessageId,
-      'edited_content': editedContent,
-      'reactions': reactions,
-      'deleted': deleted,
+      'is_edited': isEdited,
+      'is_deleted': isDeleted,
+      'created_at': createdAt?.toIso8601String(),
+      'updated_at': updatedAt?.toIso8601String(),
     };
   }
 
+  Map<String, dynamic> toJson() {
+    return toMap();
+  }
+
   Message copyWith({
-    MessageStatus? status,
+    String? id,
+    String? chatId,
+    String? senderId,
     String? content,
-    String? editedContent,
+    MessageType? type,
+    String? replyToMessageId,
     Map<String, String>? reactions,
-    bool? deleted,
+    MessageStatus? status,
+    bool? isEdited,
+    bool? isDeleted,
+    DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return Message(
-      id: id,
-      chatId: chatId,
-      senderId: senderId,
-      receiverId: receiverId,
-      type: type,
+      id: id ?? this.id,
+      chatId: chatId ?? this.chatId,
+      senderId: senderId ?? this.senderId,
       content: content ?? this.content,
-      timestamp: timestamp,
-      status: status ?? this.status,
-      replyToMessageId: replyToMessageId,
-      editedContent: editedContent ?? this.editedContent,
+      type: type ?? this.type,
+      replyToMessageId: replyToMessageId ?? this.replyToMessageId,
       reactions: reactions ?? this.reactions,
-      deleted: deleted ?? this.deleted,
+      status: status ?? this.status,
+      isEdited: isEdited ?? this.isEdited,
+      isDeleted: isDeleted ?? this.isDeleted,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }

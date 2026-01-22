@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="supabase_url">https://sgsyvfmytijspyskhexk.supabase.co</string>
+    <string name="supabase_anon_key">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnc3l2Zm15dGlqc3B5c2toZXhrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MjQ4NDEsImV4cCI6MjA4NDQwMDg0MX0.hWUoVBO8uK-zN5z3NCFtY6dc11HH7K8x60fmesEEwMA</string>
+</resources>

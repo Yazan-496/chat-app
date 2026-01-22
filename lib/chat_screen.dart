@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/model/message.dart';
+import 'package:my_chat_app/model/private_chat.dart';
+import 'package:my_chat_app/model/profile.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/view/chat_view.dart';
 import 'package:my_chat_app/notification_service.dart';
@@ -16,9 +17,16 @@ import 'package:my_chat_app/widgets/chat/chat_message_list.dart';
 import 'package:my_chat_app/widgets/chat/chat_input_area.dart';
 
 class ChatScreen extends StatefulWidget {
-  final Chat chat;
+  final PrivateChat chat;
+  final Profile otherProfile;
+  final bool isBubble;
 
-  const ChatScreen({super.key, required this.chat});
+  const ChatScreen({
+    super.key,
+    required this.chat,
+    required this.otherProfile,
+    this.isBubble = false,
+  });
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -62,7 +70,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   @override
   void initState() {
     super.initState();
-    _presenter = ChatPresenter(this, widget.chat);
+    _presenter = ChatPresenter(this, widget.chat, widget.otherProfile);
     NotificationService.setActiveChatId(widget.chat.id);
     NotificationService.flutterLocalNotificationsPlugin.cancel(widget.chat.id.hashCode);
     NotificationService.flutterLocalNotificationsPlugin.cancel(widget.chat.id.hashCode + 1);
@@ -235,13 +243,13 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(message.senderId == _presenter.currentUserId ? 'You' : widget.chat.displayName,
+        Text(message.senderId == _presenter.currentUserId ? 'You' : widget.otherProfile.displayName,
             style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
         const SizedBox(height: 2),
-        Text(message.deleted ? 'Removed message' : (message.editedContent ?? message.content),
-            style: TextStyle(color: message.deleted ? Colors.white54 : Colors.white70, fontSize: 12,
-                fontStyle: message.deleted ? FontStyle.italic : FontStyle.normal,
-                decoration: message.deleted ? TextDecoration.lineThrough : TextDecoration.none),
+        Text(message.isDeleted ? 'Removed message' : (message.content ?? ""),
+            style: TextStyle(color: message.isDeleted ? Colors.white54 : Colors.white70, fontSize: 12,
+                fontStyle: message.isDeleted ? FontStyle.italic : FontStyle.normal,
+                decoration: message.isDeleted ? TextDecoration.lineThrough : TextDecoration.none),
             maxLines: 2, overflow: TextOverflow.ellipsis),
       ],
     );
@@ -265,6 +273,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
       case MessageStatus.sent: icon = Icons.check; color = Colors.white54; break;
       case MessageStatus.delivered: icon = Icons.done_all; color = Colors.white54; break;
       case MessageStatus.read: icon = Icons.done_all; color = Colors.blue; break;
+      case MessageStatus.failed: icon = Icons.error_outline; color = Colors.redAccent; break;
     }
     return Icon(icon, size: 14, color: color);
   }
@@ -281,10 +290,10 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
               children: [
                 const Text('Replying to', style: TextStyle(color: Colors.white70, fontSize: 12)),
                 const SizedBox(height: 4),
-                Text(message.deleted ? 'Removed message' : (message.editedContent ?? message.content),
-                    style: TextStyle(color: message.deleted ? Colors.white54 : Colors.white, fontSize: 14,
-                        fontStyle: message.deleted ? FontStyle.italic : FontStyle.normal,
-                        decoration: message.deleted ? TextDecoration.lineThrough : TextDecoration.none),
+                Text(message.isDeleted ? 'Removed message' : (message.content ?? ""),
+                    style: TextStyle(color: message.isDeleted ? Colors.white54 : Colors.white, fontSize: 14,
+                        fontStyle: message.isDeleted ? FontStyle.italic : FontStyle.normal,
+                        decoration: message.isDeleted ? TextDecoration.lineThrough : TextDecoration.none),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
               ],
             ),
@@ -298,7 +307,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
   Widget _buildActiveEditIndicator(Message message) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: Colors.blue.shade900.withOpacity(0.3),
+      color: Colors.blue.shade900.withValues(alpha: 77),
       child: Row(
         children: [
           const Icon(Icons.edit, color: Colors.blue, size: 16),
@@ -336,7 +345,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
     }
 
     return PopScope(
-      canPop: !_showEmojiPicker,
+      canPop: !widget.isBubble && !_showEmojiPicker,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop && _showEmojiPicker) setState(() => _showEmojiPicker = false);
       },
@@ -344,9 +353,10 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
         backgroundColor: Colors.black,
         resizeToAvoidBottomInset: true, // Let the OS handle viewport resizing
         appBar: ChatAppBar(
-          chat: widget.chat,
+          otherProfile: _presenter.otherProfile,
           presenter: _presenter,
           isConnected: _isConnected,
+          isBubble: widget.isBubble,
           onBack: () => Navigator.of(context).pop(),
         ),
         body: GestureDetector(
@@ -371,7 +381,6 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                     child: ChatMessageList(
                       scrollController: _scrollController,
                       messages: _messages,
-                      chat: widget.chat,
                       presenter: _presenter,
                       isLoading: _isLoading,
                       messageKeys: _messageKeys,
@@ -468,7 +477,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                       borderRadius: BorderRadius.circular(30),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.3),
+                          color: Colors.black.withValues(alpha: 77),
                           blurRadius: 10,
                           offset: const Offset(0, 5),
                         ),
@@ -490,7 +499,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
-                              color: hasReacted ? Colors.blue.withOpacity(0.2) : Colors.transparent,
+                              color: hasReacted ? Colors.blue.withValues(alpha: 51) : Colors.transparent,
                               borderRadius: BorderRadius.circular(15),
                             ),
                             child: Text(emoji, style: const TextStyle(fontSize: 24)),
@@ -509,7 +518,7 @@ class _ChatScreenState extends State<ChatScreen> implements ChatView {
                         borderRadius: BorderRadius.circular(16),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.3),
+                            color: Colors.black.withValues(alpha: 77),
                             blurRadius: 10,
                             offset: const Offset(0, 5),
                           ),

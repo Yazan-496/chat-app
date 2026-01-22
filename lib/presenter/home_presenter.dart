@@ -1,25 +1,33 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'package:my_chat_app/data/chat_repository.dart';
+import 'package:my_chat_app/data/message_repository.dart';
 import 'package:my_chat_app/data/user_repository.dart';
-import 'package:my_chat_app/model/chat.dart';
-import 'package:my_chat_app/model/user.dart' as model;
+import 'package:my_chat_app/model/chat_summary.dart';
+import 'package:my_chat_app/model/delivered_status.dart';
+import 'package:my_chat_app/model/message.dart';
+import 'package:my_chat_app/model/private_chat.dart';
+import 'package:my_chat_app/model/profile.dart';
 import 'package:my_chat_app/view/home_view.dart';
+import 'package:my_chat_app/services/database_service.dart';
 import 'dart:async';
 
 class HomePresenter {
   final HomeView _view;
   final ChatRepository _chatRepository;
+  final MessageRepository _messageRepository;
   final UserRepository _userRepository;
   final SupabaseClient _supabase = Supabase.instance.client;
-  List<Chat> _chats = [];
+  List<ChatSummary> _chats = [];
   final Map<String, StreamSubscription> _statusSubscriptions = {};
-  StreamSubscription<List<Chat>>? _chatsSubscription;
+  StreamSubscription<List<PrivateChat>>? _chatsSubscription;
 
   HomePresenter(this._view)
       : _chatRepository = ChatRepository(),
+        _messageRepository = MessageRepository(),
         _userRepository = UserRepository();
 
-  List<Chat> get chats => _chats;
+  List<ChatSummary> get chats => _chats;
 
   void loadChats({bool showLoading = true}) {
     final user = _supabase.auth.currentUser;
@@ -34,9 +42,9 @@ class HomePresenter {
     }
     
     _chatsSubscription?.cancel();
-    _chatsSubscription = _chatRepository.getChatsForUser(user.id).listen(
+    _chatsSubscription = _chatRepository.streamForUser(user.id).listen(
       (chats) async {
-        _chats = chats;
+        _chats = await _buildChatSummaries(chats, user.id);
         _view.displayChats(_chats);
         if (showLoading) {
           _view.hideLoading();
@@ -44,22 +52,26 @@ class HomePresenter {
         
         // Subscribe to status updates for each chat's other user
         for (var chat in _chats) {
-          final otherUserId = chat.participantIds.firstWhere((id) => id != user.id, orElse: () => '');
+          final otherUserId = _getOtherUserId(chat.chat, user.id);
           if (otherUserId.isNotEmpty && !_statusSubscriptions.containsKey(otherUserId)) {
             _statusSubscriptions[otherUserId] = _userRepository.getCurrentUserStream(otherUserId).listen((updatedUser) {
               if (updatedUser != null) {
-                _view.updateUserStatus(otherUserId, updatedUser.isOnline, updatedUser.lastSeen);
+                _view.updateUserStatus(
+                  otherUserId,
+                  updatedUser.status == UserStatus.online,
+                  updatedUser.lastSeen,
+                );
               }
             });
           }
         }
       },
       onError: (error) {
-        print('HomePresenter: Error loading chats: $error');
+        debugPrint('HomePresenter: Error loading chats: $error');
         // Only clear chats if we don't have any yet (initial load failure)
         // If we have local chats, keep them.
         if (_chats.isEmpty) {
-          _view.displayChats([]);
+          _view.displayChats(<ChatSummary>[]);
         }
         if (showLoading) {
           _view.hideLoading();
@@ -74,22 +86,22 @@ class HomePresenter {
 
     try {
       // 1. Sync any pending messages sent while offline
-      await _chatRepository.syncPendingMessages();
+      await DatabaseService.syncPendingChanges();
 
       // 2. Force a manual fetch of chats
-      final chatsData = await _chatRepository.fetchChatsForUser(user.id);
-      _chats = chatsData;
+      final chatsData = await _chatRepository.streamForUser(user.id).first;
+      _chats = await _buildChatSummaries(chatsData, user.id);
       _view.displayChats(_chats);
 
       // 3. Restart subscriptions without showing full loading state
       loadChats(showLoading: false);
     } catch (e) {
-      print('HomePresenter: Error refreshing chats: $e');
+      debugPrint('HomePresenter: Error refreshing chats: $e');
     }
   }
 
   Future<void> syncPendingMessages() async {
-    await _chatRepository.syncPendingMessages();
+    await DatabaseService.syncPendingChanges();
   }
 
   void dispose() {
@@ -103,7 +115,7 @@ class HomePresenter {
   Future<void> deleteChat(String chatId) async {
     _view.showLoading();
     try {
-      await _chatRepository.deleteChat(chatId);
+      await _chatRepository.delete(chatId);
       _view.showMessage('Chat deleted successfully.');
       loadChats();
     } catch (e) {
@@ -112,29 +124,17 @@ class HomePresenter {
     }
   }
 
-  Future<Chat?> getChat(String chatId) async {
+  Future<ChatSummary?> getChat(String chatId) async {
     final user = _supabase.auth.currentUser;
     if (user == null) return null;
 
     try {
-      final chat = await _chatRepository.getChatById(chatId);
+      final chat = await _chatRepository.fetchById(chatId);
       if (chat == null) return null;
 
-      final otherUserId = chat.participantIds.firstWhere((id) => id != user.id, orElse: () => '');
-      if (otherUserId.isEmpty) return chat;
-
-      final otherUser = await _userRepository.getUser(otherUserId);
-      if (otherUser != null) {
-        return chat.copyWith(
-          displayName: otherUser.displayName,
-          profilePictureUrl: otherUser.profilePictureUrl,
-          isOnline: otherUser.isOnline,
-          lastSeen: otherUser.lastSeen,
-        );
-      }
-      return chat;
+      return await _buildChatSummary(chat, user.id);
     } catch (e) {
-      print('Error fetching single chat: $e');
+      debugPrint('Error fetching single chat: $e');
       return null;
     }
   }
@@ -142,5 +142,53 @@ class HomePresenter {
   Future<void> logout() async {
     await _supabase.auth.signOut();
     _view.navigateToLogin();
+  }
+
+  String _getOtherUserId(PrivateChat chat, String currentUserId) {
+    return chat.userOneId == currentUserId ? chat.userTwoId : chat.userOneId;
+  }
+
+  Future<List<ChatSummary>> _buildChatSummaries(
+    List<PrivateChat> chats,
+    String currentUserId,
+  ) async {
+    final summaries = await Future.wait(
+      chats.map((chat) => _buildChatSummary(chat, currentUserId)),
+    );
+    summaries.sort((a, b) {
+      final aTime = a.lastMessage?.createdAt ?? a.chat.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bTime = b.lastMessage?.createdAt ?? b.chat.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bTime.compareTo(aTime);
+    });
+    return summaries;
+  }
+
+  Future<ChatSummary> _buildChatSummary(
+    PrivateChat chat,
+    String currentUserId,
+  ) async {
+    final otherUserId = _getOtherUserId(chat, currentUserId);
+    final otherProfile = await _userRepository.getUser(otherUserId) ??
+        Profile(
+          id: otherUserId,
+          username: otherUserId,
+          displayName: otherUserId,
+        );
+    Message? lastMessage;
+    if (chat.lastMessageId != null) {
+      lastMessage = await _messageRepository.fetchById(chat.lastMessageId!);
+    }
+    final participant = await _chatRepository.fetchParticipant(chat.id, currentUserId);
+    final deliveredStatus = DeliveredStatus(
+      lastDeliveredMessageId: participant?.lastDeliveredMessageId,
+      lastReadMessageId: participant?.lastReadMessageId,
+    );
+    return ChatSummary(
+      chat: chat,
+      otherProfile: otherProfile,
+      lastMessage: lastMessage,
+      unreadCount: participant?.unreadCount ?? 0,
+      deliveredStatus: deliveredStatus,
+    );
   }
 }

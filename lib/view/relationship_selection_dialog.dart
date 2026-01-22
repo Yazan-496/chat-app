@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/model/user_relationship.dart';
 
 class RelationshipSelectionDialog extends StatelessWidget {
   const RelationshipSelectionDialog({super.key});

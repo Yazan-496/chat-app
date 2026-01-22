@@ -20,6 +20,7 @@ dependencies:
   shared_preferences: ^2.2.2
   encrypt: ^5.0.1
   flutter_local_notifications: ^19.5.0
+  onesignal_flutter: ^5.1.0
   pointycastle: ^3.9.1
   timezone: ^0.10.0
   collection: ^1.18.0 # For firstWhereOrNull extension method

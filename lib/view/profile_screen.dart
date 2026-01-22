@@ -2,11 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:my_chat_app/model/chat_summary.dart';
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:my_chat_app/model/user.dart' as app_user;
+import 'package:my_chat_app/model/profile.dart' as app_user;
 import 'package:my_chat_app/presenter/profile_presenter.dart';
 import 'package:my_chat_app/view/profile_view.dart';
-import 'package:my_chat_app/model/relationship.dart';
+import 'package:my_chat_app/model/user_relationship.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:my_chat_app/utils/toast_utils.dart';
 import 'package:my_chat_app/view/auth_screen.dart';
@@ -24,18 +25,18 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   late ProfilePresenter _presenter;
   final TextEditingController _displayNameController = TextEditingController();
-  app_user.User? _userProfile;
+  app_user.Profile? _userProfile;
   bool _isLoading = false;
   bool _isCurrentUser = false;
   final SupabaseClient _supabase = Supabase.instance.client;
-  Relationship? _currentRelationship;
+  UserRelationship? _currentRelationship;
   Timer? _statusUpdateTimer;
   RealtimeChannel? _statusChannel;
   bool _isConnected = true;
   bool _showRestoredMessage = false;
   Timer? _restoredMessageTimer;
   Timer? _connectionDebounceTimer;
-
+  List<ChatSummary> _chats = [];
   @override
   void initState() {
     super.initState();
@@ -123,7 +124,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   }
 
   @override
-  void displayUserProfile(app_user.User user) {
+  void displayUserProfile(app_user.Profile user) {
     setState(() {
       _userProfile = user;
       _displayNameController.text = user.displayName;
@@ -131,7 +132,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   }
 
   @override
-  void displayRelationship(Relationship? relationship) {
+  void displayRelationship(UserRelationship? relationship) {
     setState(() {
       _currentRelationship = relationship;
     });
@@ -184,7 +185,9 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
       return 'Last seen ${DateFormat('MMM d').format(lastSeen)}';
     }
   }
-
+  bool _isActuallyOnline(app_user.Profile? profile) {
+    return profile?.status == app_user.UserStatus.online;
+  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -202,7 +205,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                           if (!_isConnected)
                             Container(
                               width: double.infinity,
-                              color: Colors.redAccent.withOpacity(0.9),
+                              color: Colors.redAccent.withValues(alpha: 230),
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               child: const Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -221,7 +224,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                           if (_showRestoredMessage)
                             Container(
                               width: double.infinity,
-                              color: Colors.green.withOpacity(0.9),
+                              color: Colors.green.withValues(alpha: 230),
                               padding: const EdgeInsets.symmetric(vertical: 4),
                               child: const Row(
                                 mainAxisAlignment: MainAxisAlignment.center,
@@ -281,7 +284,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                             border: Border.all(color: Colors.grey.shade900, width: 4),
                                             boxShadow: [
                                               BoxShadow(
-                                                color: Colors.black.withOpacity(0.5),
+                                                color: Colors.black.withValues(alpha: 128),
                                                 blurRadius: 10,
                                                 offset: const Offset(0, 5),
                                               ),
@@ -292,10 +295,10 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                             backgroundColor: _userProfile?.avatarColor != null 
                                                 ? Color(_userProfile!.avatarColor!) 
                                                 : Colors.blue.shade300,
-                                            backgroundImage: _userProfile?.profilePictureUrl != null
-                                                ? CachedNetworkImageProvider(_userProfile!.profilePictureUrl!)
+                                            backgroundImage: _userProfile?.avatarUrl != null
+                                                ? CachedNetworkImageProvider(_userProfile!.avatarUrl!)
                                                 : null,
-                                            child: _userProfile?.profilePictureUrl == null
+                                            child: _userProfile?.avatarUrl == null
                                                 ? Text(
                                                     _userProfile!.displayName.isNotEmpty ? _userProfile!.displayName[0].toUpperCase() : '?',
                                                     style: const TextStyle(color: Colors.white, fontSize: 48, fontWeight: FontWeight.bold),
@@ -353,11 +356,11 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                               width: 12,
                                               height: 12,
                                               decoration: BoxDecoration(
-                                                color: _userProfile!.isActuallyOnline ? Colors.greenAccent : Colors.grey,
+                                                color: _isActuallyOnline(_userProfile) ? Colors.greenAccent : Colors.grey,
                                                 shape: BoxShape.circle,
-                                                boxShadow: _userProfile!.isActuallyOnline ? [
+                                                boxShadow: _isActuallyOnline(_userProfile) ? [
                                                   BoxShadow(
-                                                    color: Colors.greenAccent.withOpacity(0.5),
+                                                    color: Colors.greenAccent.withValues(alpha: 128),
                                                     blurRadius: 8,
                                                     spreadRadius: 2,
                                                   )
@@ -366,9 +369,9 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                                             ),
                                             const SizedBox(width: 10),
                                             Text(
-                                              _userProfile!.isActuallyOnline ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
+                                              _isActuallyOnline(_userProfile)  ? 'Online Now' : _formatLastSeen(_userProfile!.lastSeen),
                                               style: TextStyle(
-                                                color: _userProfile!.isActuallyOnline ? Colors.greenAccent : Colors.grey,
+                                                color: _isActuallyOnline(_userProfile) ? Colors.greenAccent : Colors.grey,
                                                 fontWeight: FontWeight.bold,
                                                 fontSize: 14,
                                               ),
@@ -446,7 +449,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
           ),
           if (_isLoading && _userProfile != null)
             Container(
-              color: Colors.black.withOpacity(0.5),
+              color: Colors.black.withValues(alpha: 128),
               child: const Center(
                 child: CircularProgressIndicator(color: Colors.blueAccent),
               ),
@@ -468,7 +471,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.blueAccent.withOpacity(0.1),
+              color: Colors.blueAccent.withValues(alpha: 26),
               shape: BoxShape.circle,
             ),
             child: Icon(icon, color: Colors.blueAccent, size: 22),
@@ -514,7 +517,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.blueAccent.withOpacity(0.1),
+                  color: Colors.blueAccent.withValues(alpha: 26),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, color: Colors.blueAccent, size: 22),
@@ -568,7 +571,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: Colors.purpleAccent.withOpacity(0.1),
+              color: Colors.purpleAccent.withValues(alpha: 26),
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.people_outline, color: Colors.purpleAccent, size: 22),
@@ -584,7 +587,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
                 ),
                 const SizedBox(height: 4),
                 DropdownButton<RelationshipType>(
-                  value: _currentRelationship?.type ?? RelationshipType.none,
+                  value: _currentRelationship?.type ?? RelationshipType.friend,
                   dropdownColor: Colors.grey.shade900,
                   underline: const SizedBox(),
                   isExpanded: true,
@@ -619,9 +622,9 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.redAccent.withOpacity(0.05),
+        color: Colors.redAccent.withValues(alpha: 13),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.redAccent.withOpacity(0.1)),
+        border: Border.all(color: Colors.redAccent.withValues(alpha: 26)),
       ),
       child: ListTile(
         onTap: onTap,
@@ -629,7 +632,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: Colors.redAccent.withOpacity(0.1),
+            color: Colors.redAccent.withValues(alpha: 26),
             shape: BoxShape.circle,
           ),
           child: Icon(icon, color: Colors.redAccent, size: 24),
@@ -640,7 +643,7 @@ class _ProfileScreenState extends State<ProfileScreen> implements ProfileView {
         ),
         subtitle: Text(
           subtitle,
-          style: TextStyle(color: Colors.redAccent.withOpacity(0.7), fontSize: 13),
+          style: TextStyle(color: Colors.redAccent.withValues(alpha: 179), fontSize: 13),
         ),
         trailing: const Icon(Icons.chevron_right, color: Colors.redAccent),
       ),

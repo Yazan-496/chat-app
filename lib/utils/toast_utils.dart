@@ -13,12 +13,12 @@ class ToastUtils {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.grey.shade900.withOpacity(0.9),
+              color: Colors.grey.shade900.withValues(alpha: 230),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.blueAccent.withOpacity(0.5), width: 1),
+              border: Border.all(color: Colors.blueAccent.withValues(alpha: 128), width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 77),
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),

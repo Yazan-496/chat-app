@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:my_chat_app/model/message.dart';
-import 'package:my_chat_app/model/chat.dart';
 import 'package:my_chat_app/presenter/chat_presenter.dart';
 import 'package:my_chat_app/message_widget.dart';
 
@@ -8,7 +7,6 @@ class MessageItemWrapper extends StatelessWidget {
   final Message message;
   final bool isMe;
   final bool showAvatar;
-  final Chat chat;
   final ChatPresenter presenter;
   final bool isOnlyEmojis;
   final GlobalKey messageKey;
@@ -25,7 +23,6 @@ class MessageItemWrapper extends StatelessWidget {
     required this.message,
     required this.isMe,
     required this.showAvatar,
-    required this.chat,
     required this.presenter,
     required this.isOnlyEmojis,
     required this.onLongPress,
@@ -50,9 +47,9 @@ class MessageItemWrapper extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 4.0),
             padding: const EdgeInsets.all(8.0),
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.2),
+              color: Colors.black.withValues(alpha: 51),
               borderRadius: BorderRadius.circular(8.0),
-              border: Border.all(color: Colors.white.withOpacity(0.1)),
+              border: Border.all(color: Colors.white.withValues(alpha: 26)),
             ),
             child: InkWell(
               onTap: () => onReplyTap(message.replyToMessageId!),
@@ -63,15 +60,20 @@ class MessageItemWrapper extends StatelessWidget {
       );
     }
 
+    final otherProfile = presenter.otherProfile;
+    final profilePictureUrl = isMe ? null : otherProfile.avatarUrl;
+    final avatarColor = isMe ? null : otherProfile.avatarColor;
+    final displayName = isMe ? 'You' : otherProfile.displayName;
+
     widgets.add(
       MessageItem(
         key: messageKey,
         message: message,
         isMe: isMe,
         showAvatar: showAvatar,
-        profilePictureUrl: chat.profilePictureUrl,
-        avatarColor: chat.avatarColor,
-        displayName: chat.displayName,
+        profilePictureUrl: profilePictureUrl,
+        avatarColor: avatarColor,
+        displayName: displayName,
         isOnlyEmojis: isOnlyEmojis,
         onLongPress: onLongPress,
         onDoubleTapReact: onDoubleTapReact,
@@ -81,6 +83,7 @@ class MessageItemWrapper extends StatelessWidget {
         onSwipeReply: onSwipeReply,
       ),
     );
+
 
     return RepaintBoundary(
       child: Column(

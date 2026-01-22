@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'package:my_chat_app/services/backend_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
 
@@ -30,17 +31,17 @@ class SupabaseAuthService implements BackendService {
 
   @override
   Future<String?> registerUser(String username, String password) async {
-    print('DEBUG: registerUser started for username: $username');
+    debugPrint('DEBUG: registerUser started for username: $username');
     try {
       // 1. Check if username is already taken in the profiles table
       try {
         final bool isTaken = await _userRepository.isUsernameTaken(username);
         if (isTaken) {
-          print('DEBUG: Username "$username" is already taken in profiles table');
+          debugPrint('DEBUG: Username "$username" is already taken in profiles table');
           return 'Username already exists. Please choose a different one.';
         }
       } catch (e) {
-        print('ERROR: Connection issue during username check: $e');
+        debugPrint('ERROR: Connection issue during username check: $e');
         if (e.toString().contains('Connection reset') || e.toString().contains('ClientException')) {
           return 'Network error: Connection to Supabase was reset. Please check your internet or if the Supabase project is active.';
         }
@@ -57,7 +58,7 @@ class SupabaseAuthService implements BackendService {
         },
       );
       
-      print('DEBUG: Auth.signUp response - User ID: ${res.user?.id}, Has Session: ${res.session != null}');
+      debugPrint('DEBUG: Auth.signUp response - User ID: ${res.user?.id}, Has Session: ${res.session != null}');
       
       if (res.user != null) {
         String uid = res.user!.id;
@@ -66,20 +67,20 @@ class SupabaseAuthService implements BackendService {
         // We only do this if you DON'T have a trigger.
         // If you DO have a trigger, this might cause a duplicate key error if the trigger succeeded.
         try {
-          print('DEBUG: Attempting to create profile in DB for UID: $uid');
+          debugPrint('DEBUG: Attempting to create profile in DB for UID: $uid');
           await _userRepository.createUserProfile(
             uid: uid,
             username: username,
             displayName: username,
           );
-          print('DEBUG: Profile creation successful for UID: $uid');
+          debugPrint('DEBUG: Profile creation successful for UID: $uid');
         } catch (e) {
-          print('DEBUG: Manual profile creation failed (might already be created by trigger): $e');
+          debugPrint('DEBUG: Manual profile creation failed (might already be created by trigger): $e');
           // If the profile already exists (created by a trigger), we ignore this error.
           // If it's another error (like RLS), we handle it.
           if (!e.toString().toLowerCase().contains('duplicate') && 
               !e.toString().toLowerCase().contains('already exists')) {
-            print('CRITICAL: Profile creation failed for $uid. Error: $e');
+            debugPrint('CRITICAL: Profile creation failed for $uid. Error: $e');
             
             if (res.session == null) {
               return 'Account created! Please check your email ($username@mychatapp.com) to verify your account before logging in.';
@@ -89,16 +90,16 @@ class SupabaseAuthService implements BackendService {
           }
         }
       } else {
-        print('ERROR: Auth.signUp returned null user without throwing exception');
+        debugPrint('ERROR: Auth.signUp returned null user without throwing exception');
         return 'Registration failed: Could not create user.';
       }
       return null;
     } on AuthException catch (e) {
-      print('ERROR: AuthException during registration: ${e.message} (Status: ${e.statusCode})');
+      debugPrint('ERROR: AuthException during registration: ${e.message} (Status: ${e.statusCode})');
       
       if (e.statusCode == '500' || e.message.contains('Database error saving new user') || e.message.contains('unexpected_failure')) {
-        print('CRITICAL: This 500 error is caused by a failing Supabase Trigger.');
-        print('FIX: Go to Supabase SQL Editor and run: DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;');
+        debugPrint('CRITICAL: This 500 error is caused by a failing Supabase Trigger.');
+        debugPrint('FIX: Go to Supabase SQL Editor and run: DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;');
         return 'Registration server error. Please contact admin to check Supabase triggers.';
       }
 
@@ -111,7 +112,7 @@ class SupabaseAuthService implements BackendService {
       }
       return 'Error during registration: ${e.message}';
     } catch (e) {
-      print('ERROR: Unexpected error during registration: $e');
+      debugPrint('ERROR: Unexpected error during registration: $e');
       return e.toString();
     }
   }

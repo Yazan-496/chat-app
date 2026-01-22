@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:developer';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:my_chat_app/notification_service.dart';
 
 class PresenceService {
   static final PresenceService _instance = PresenceService._internal();
@@ -58,17 +59,18 @@ class PresenceService {
   }
 
   Future<void> _sendOnlineStatus() async {
-  if (_currentUserId == null) return;
-  try {
-    log('PresenceService: Sending heartbeat for user $_currentUserId');
-    await _supabase.rpc('handle_user_status', params: {
-      'p_user_id': _currentUserId,      
-      'p_online_status': true,         
-    });
-  } catch (e) {
-    log('PresenceService: Error sending heartbeat: $e');
+    if (_currentUserId == null) return;
+    try {
+      log('PresenceService: Sending heartbeat for user $_currentUserId');
+      await _supabase.rpc('handle_user_status', params: {
+        'p_user_id': _currentUserId,
+        'p_online_status': true,
+        'p_active_chat_id': NotificationService.currentActiveChatId,
+      });
+    } catch (e) {
+      log('PresenceService: Error sending heartbeat: $e');
+    }
   }
-}
   /// Helper for compatibility with old code
   Future<void> setUserOnline(String uid) async {
     log('PresenceService: Manually setting user online: $uid');

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
@@ -25,7 +26,7 @@ class MediaService {
       final String publicUrl = _supabase.storage.from(bucketName).getPublicUrl(fileRelativePath);
       return publicUrl;
     } catch (e) {
-      print('Error uploading file: $e');
+      debugPrint('Error uploading file: $e');
       return null;
     }
   }
@@ -38,11 +39,11 @@ class MediaService {
         await _audioRecorder.start(const RecordConfig(), path: filePath);
         return filePath;
       } else {
-        print('Microphone permission not granted.');
+        debugPrint('Microphone permission not granted.');
         return null;
       }
     } catch (e) {
-      print('Error starting recording: $e');
+      debugPrint('Error starting recording: $e');
       return null;
     }
   }
@@ -52,7 +53,7 @@ class MediaService {
       final path = await _audioRecorder.stop();
       return path; // Returns the recorded file path
     } catch (e) {
-      print('Error stopping recording: $e');
+      debugPrint('Error stopping recording: $e');
       return null;
     }
   }

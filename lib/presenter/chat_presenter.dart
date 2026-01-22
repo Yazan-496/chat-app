@@ -1,14 +1,17 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
-import 'package:my_chat_app/data/chat_repository.dart';
-import 'package:my_chat_app/model/chat.dart';
+import 'package:my_chat_app/data/message_repository.dart';
 import 'package:my_chat_app/model/message.dart';
+import 'package:my_chat_app/model/message_reaction.dart';
+import 'package:my_chat_app/model/private_chat.dart';
+import 'package:my_chat_app/model/profile.dart';
+import 'package:my_chat_app/model/chat_participant.dart';
+import 'package:my_chat_app/data/chat_repository.dart';
 import 'package:my_chat_app/view/chat_view.dart';
 import 'package:my_chat_app/services/media_service.dart';
 import 'package:my_chat_app/services/encryption_service.dart';
-import 'package:my_chat_app/services/local_storage_service.dart';
 import 'package:my_chat_app/data/user_repository.dart';
-import 'package:my_chat_app/model/user.dart' as model;
+import 'package:my_chat_app/services/database_service.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -16,23 +19,42 @@ import 'package:image_picker/image_picker.dart';
 import 'dart:async';
 import 'package:my_chat_app/services/sound_service.dart';
 import 'package:my_chat_app/notification_service.dart';
+import 'package:flutter/foundation.dart';
 
 /// Presenter for the chat screen.
 /// Handles all business logic related to a specific chat, including message sending,
 /// receiving, media handling, and encryption.
+class ActiveChatState extends ChangeNotifier {
+  String? _activeChatId;
+
+  String? get activeChatId => _activeChatId;
+
+  void openChat(String chatId) {
+    _activeChatId = chatId;
+    notifyListeners();
+  }
+
+  void closeChat() {
+    _activeChatId = null;
+    notifyListeners();
+  }
+}
+
 class ChatPresenter {
   final ChatView _view;
   final ChatRepository _chatRepository;
+  final MessageRepository _messageRepository;
   final MediaService _mediaService;
   final EncryptionService _encryptionService;
-  final LocalStorageService _localStorageService = LocalStorageService();
   final UserRepository _userRepository;
+  final ActiveChatState _activeChatState;
   final SupabaseClient _supabase = Supabase.instance.client;
-  final Chat _chat;
+  final String? _cachedUserId;
+  final PrivateChat _chat;
+  Profile _otherProfile;
   final _uuid = const Uuid();
   List<Message> _messages = [];
-  List<Message> _optimisticMessages = [];
-  Set<String> _seenMessageIds = {};
+  final List<Message> _optimisticMessages = [];
 
   Message? _selectedMessageForReply;
   Message? _selectedMessageForEdit;
@@ -44,18 +66,21 @@ class ChatPresenter {
   Timer? _typingTimer;
   Timer? _readTimer;
   StreamSubscription? _otherUserStatusSubscription;
-  bool _otherUserInChat = false;
-  bool _otherUserInChatPrev = false;
+  StreamSubscription<List<ChatParticipant>>? _participantsSubscription;
   bool _isLoadingOlder = false;
   bool _hasMoreOlder = true;
+  ChatParticipant? _otherParticipant;
 
-  ChatPresenter(this._view, this._chat)
-      : _chatRepository = ChatRepository(),
+  ChatPresenter(this._view, this._chat, this._otherProfile)
+      : _cachedUserId = Supabase.instance.client.auth.currentUser?.id,
+        _chatRepository = ChatRepository(),
+        _messageRepository = MessageRepository(),
         _mediaService = MediaService(),
         _encryptionService = EncryptionService(),
-        _userRepository = UserRepository();
+        _userRepository = UserRepository(),
+        _activeChatState = ActiveChatState();
 
-  String? get currentUserId => _supabase.auth.currentUser?.id;
+  String? get currentUserId => _supabase.auth.currentUser?.id ?? _cachedUserId;
 
   List<Message> get messages => _messages;
   Message? get selectedMessageForReply => _selectedMessageForReply;
@@ -63,115 +88,98 @@ class ChatPresenter {
   bool get isRecording => _isRecording;
   bool _otherUserTyping = false;
   bool get otherUserTyping => _otherUserTyping;
-  bool get otherUserInChat => _otherUserInChat;
+  Profile get otherProfile => _otherProfile;
+  ActiveChatState get activeChatState => _activeChatState;
 
   /// Loads messages for the current chat and sets up a real-time listener.
   void loadMessages() {
-    // Set active chat ID for the current user
-    if (currentUserId != null) {
-      _userRepository.updateActiveChatId(currentUserId!, _chat.id);
-    }
+    _activeChatState.openChat(_chat.id);
 
-    _chatRepository.getChatMessages(_chat.id).listen((messages) {
+    DatabaseService.getMessages(_chat.id).then((cached) {
+      _messages = _decryptMessages(cached);
+      _updateViewWithCombinedMessages();
+    });
+
+    _messageRepository.streamByChat(_chat.id).listen((messages) async {
       final previousIds = _messages.map((m) => m.id).toSet();
-      _messages = messages.map<Message>((message) {
-        // Decrypt text messages before displaying.
-        if (message.type == MessageType.text) {
-          try {
-            final decryptedContent = _encryptionService.decryptText(message.content);
-            String? decryptedEditedContent;
-            if (message.editedContent != null) {
-              decryptedEditedContent = _encryptionService.decryptText(message.editedContent!);
-            }
-            return message.copyWith(
-              content: decryptedContent,
-              editedContent: decryptedEditedContent,
-            );
-          } catch (e) {
-            print('ChatPresenter: Decryption failed for message ID: ${message.id}. Error: $e');
-            return message.copyWith(content: 'Decryption Error: Invalid or corrupt message content.');
-          }
-        }
-        return message;
-      }).toList();
-
-      // Remove optimistic messages that are now confirmed by the stream
+      _messages = _decryptMessages(messages);
       final confirmedIds = _messages.map((m) => m.id).toSet();
       _optimisticMessages.removeWhere((m) => confirmedIds.contains(m.id));
-
       _markIncomingMessagesAsDelivered(_messages, previousIds);
-      final otherId = _chat.getOtherUserId(currentUserId!);
-      final hasNewIncoming = _messages.any((m) => m.senderId == otherId && !previousIds.contains(m.id));
+      if (_otherParticipant != null) {
+        await _applyOutgoingStatus(_otherParticipant!);
+      }
+      final otherId = _getOtherUserId(currentUserId);
+      final hasNewIncoming =
+          _messages.any((m) => m.senderId == otherId && !previousIds.contains(m.id));
       if (NotificationService.currentActiveChatId == _chat.id && hasNewIncoming) {
-        // Schedule read marking for new incoming while we are in chat
         scheduleReadMark();
       }
       _updateViewWithCombinedMessages();
     });
 
-    // Subscribe to other user's online status
-    final otherUserId = _chat.getOtherUserId(currentUserId!);
-    _otherUserStatusSubscription = _userRepository.getCurrentUserStream(otherUserId).listen((otherUser) {
-      if (otherUser != null) {
-        final wasInChat = _otherUserInChat;
-        _chat.isOnline = otherUser.isOnline;
-        _chat.lastSeen = otherUser.lastSeen;
-        _otherUserInChat = otherUser.activeChatId == _chat.id;
-        _otherUserInChatPrev = wasInChat;
-        // If we are in this chat, always schedule read marking
-        if (NotificationService.currentActiveChatId == _chat.id) {
-          scheduleReadMark();
-        }
-        _view.updateView(); // Notify UI to rebuild with updated status
-      }
-    });
-
-    // Subscribe to chat document for typing/presence updates
-    _chatRepository.getChatDocStream(_chat.id).listen((data) {
-      try {
-        if (data.isNotEmpty && data['typing_status'] is Map<String, dynamic>) {
-          final typingMap = Map<String, dynamic>.from(data['typing_status']);
-          final otherId = _chat.getOtherUserId(currentUserId!);
-          final isTyping = typingMap[otherId] == true;
-          _otherUserTyping = isTyping;
+    final otherUserId = _getOtherUserId(currentUserId);
+    if (otherUserId != null) {
+      _otherUserStatusSubscription =
+          _userRepository.getCurrentUserStream(otherUserId).listen((otherUser) {
+        if (otherUser != null) {
+          _otherProfile = otherUser;
+          if (NotificationService.currentActiveChatId == _chat.id) {
+            scheduleReadMark();
+          }
           _view.updateView();
         }
-      } catch (e) {
-        // ignore parsing errors
-      }
-    });
+      });
+    }
+
+    _participantsSubscription?.cancel();
+    final participantOtherId = _getOtherUserId(currentUserId);
+    if (participantOtherId.isNotEmpty) {
+      _participantsSubscription =
+          _chatRepository.streamParticipants(_chat.id).listen((participants) async {
+        ChatParticipant? otherParticipant;
+        for (final participant in participants) {
+          if (participant.userId == participantOtherId) {
+            otherParticipant = participant;
+            break;
+          }
+        }
+        if (otherParticipant == null) return;
+        _otherParticipant = otherParticipant;
+        await _applyOutgoingStatus(otherParticipant);
+      });
+    }
+    _loadParticipantsOnce();
   }
 
-  /// Filters incoming messages with status=sent and marks them delivered using a batch update.
-  Future<void> _markIncomingMessagesAsDelivered(List<Message> messages, Set<String> previousIds) async {
+  Future<void> _markIncomingMessagesAsDelivered(
+    List<Message> messages,
+    Set<String> previousIds,
+  ) async {
     if (currentUserId == null) return;
-    final otherId = _chat.getOtherUserId(currentUserId!);
-    final toDeliver = <String, MessageStatus>{};
-    for (final m in messages) {
-      if (m.senderId == otherId && m.status == MessageStatus.sent) {
-        toDeliver[m.id] = MessageStatus.delivered;
-      }
-    }
+    final otherId = _getOtherUserId(currentUserId);
+    final toDeliver = messages
+        .where((m) => m.senderId == otherId && !previousIds.contains(m.id))
+        .toList();
     if (toDeliver.isEmpty) return;
-    try {
-      await _chatRepository.updateMessagesStatusBatch(_chat.id, toDeliver);
-      // Update local state immediately
-      _messages = _messages.map((m) {
-        if (toDeliver.containsKey(m.id)) {
-          return m.copyWith(status: MessageStatus.delivered);
-        }
-        return m;
-      }).toList();
-      // Trigger sound if chat is open and any of these were new
-      final hadNewDelivered = _messages.any((m) => toDeliver.containsKey(m.id) && !previousIds.contains(m.id));
-      if (hadNewDelivered && NotificationService.currentActiveChatId == _chat.id) {
-        SoundService.instance.playReceived();
+    for (final message in toDeliver) {
+      try {
+        await _chatRepository.markMessageDelivered(_chat.id, message.id);
+      } catch (e) {}
+    }
+    final updated = _messages.map((message) {
+      if (toDeliver.any((m) => m.id == message.id)) {
+        return message.copyWith(status: MessageStatus.delivered);
       }
-    } catch (e) {
-      // If batch fails, fall back to individual updates
-      for (final entry in toDeliver.entries) {
-        await _chatRepository.updateMessageStatus(_chat.id, entry.key, entry.value);
-      }
+      return message;
+    }).toList();
+    if (updated.isNotEmpty) {
+      _messages = updated;
+      _updateViewWithCombinedMessages();
+      await DatabaseService.saveMessages(_messages);
+    }
+    if (NotificationService.currentActiveChatId == _chat.id) {
+      SoundService.instance.playReceived();
     }
   }
 
@@ -194,12 +202,12 @@ class ChatPresenter {
       id: messageId,
       chatId: _chat.id,
       senderId: currentUserId!,
-      receiverId: _chat.getOtherUserId(currentUserId!),
       type: MessageType.text,
       content: encryptedContent,
-      timestamp: DateTime.now().toUtc(),
-      status: MessageStatus.sending, // Set initial status
       replyToMessageId: _selectedMessageForReply?.id,
+      status: MessageStatus.sending,
+      createdAt: DateTime.now().toUtc(),
+      updatedAt: DateTime.now().toUtc(),
     );
 
     // Add to optimistic messages for immediate display
@@ -210,10 +218,9 @@ class ChatPresenter {
 
     // Introduce a delay to visually show "sending" state
     await Future.delayed(const Duration(seconds: 0));
-    final error = await _chatRepository.sendMessage(message);
-    if (error != null) {
-      _optimisticMessages.removeWhere((m) => m.id == messageId);
-      _updateViewWithCombinedMessages();
+    final success = await _sendMessage(message, plainTextPreview: content);
+    if (!success) {
+      _handleSendFailure(messageId);
     } else {
       // Play sound only after successful send (one check)
       SoundService.instance.playSent();
@@ -227,8 +234,185 @@ class ChatPresenter {
     final combined = [..._messages, ..._optimisticMessages];
     // Sort by timestamp descending (newest first)
     // Since ListView is reversed (reverse: true), index 0 (newest) will be at the bottom.
-    combined.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0);
+    combined.sort((a, b) {
+      final aTime = a.createdAt ?? a.updatedAt ?? epoch;
+      final bTime = b.createdAt ?? b.updatedAt ?? epoch;
+      final timeCompare = bTime.compareTo(aTime);
+      if (timeCompare != 0) {
+        return timeCompare;
+      }
+      return b.id.compareTo(a.id);
+    });
     _view.displayMessages(combined);
+  }
+
+  String _getOtherUserId(String? userId) {
+    if (userId == _chat.userOneId) {
+      return _chat.userTwoId;
+    }
+    if (userId == _chat.userTwoId) {
+      return _chat.userOneId;
+    }
+    return _chat.userTwoId;
+  }
+
+  Future<bool> _sendMessage(
+    Message message, {
+    String? plainTextPreview,
+  }) async {
+    await DatabaseService.saveMessages([message], pendingSync: true);
+    final changeId =
+        await DatabaseService.enqueueMessageChange(message, action: 'create');
+    try {
+      final created = await _messageRepository.create(message);
+      await DatabaseService.saveMessages([created]);
+      await DatabaseService.removePendingChange(changeId);
+      await _sendPushForMessage(created, plainTextPreview: plainTextPreview);
+      return true;
+    } on PostgrestException catch (e) {
+      _view.showMessage('Send failed: ${e.message}');
+      return false;
+    } catch (e) {
+      _view.showMessage('Send failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> _sendPushForMessage(
+    Message message, {
+    String? plainTextPreview,
+  }) async {
+    try {
+      final senderId = currentUserId;
+      if (senderId == null) return;
+      final recipientId = _getOtherUserId(senderId);
+      if (recipientId.isEmpty) return;
+
+      final body = NotificationService.buildNotificationBody(
+        message,
+        plainText: plainTextPreview,
+      );
+
+      Map<String, dynamic>? senderProfile;
+      try {
+        senderProfile = await _supabase
+            .from('profiles')
+            .select('display_name, avatar_url, avatar_color')
+            .eq('id', senderId)
+            .maybeSingle();
+      } catch (_) {}
+
+      final userMetadata = _supabase.auth.currentUser?.userMetadata ?? {};
+      final displayName = senderProfile?['display_name'] ??
+          userMetadata['display_name'] ??
+          userMetadata['displayName'] ??
+          userMetadata['username'] ??
+          userMetadata['full_name'];
+      final avatarUrl = senderProfile?['avatar_url'] ??
+          userMetadata['avatar_url'] ??
+          userMetadata['avatarUrl'] ??
+          userMetadata['picture'];
+      final avatarColor = senderProfile?['avatar_color'] ??
+          userMetadata['avatar_color'] ??
+          userMetadata['avatarColor'];
+
+      final data = <String, dynamic>{
+        'chat_id': message.chatId,
+        'message_id': message.id,
+        'sender_id': senderId,
+        'recipient_id': recipientId,
+        'message_body': body,
+      };
+
+      if (displayName is String && displayName.isNotEmpty) {
+        data['sender_name'] = displayName;
+      }
+      if (avatarUrl is String && avatarUrl.isNotEmpty) {
+        data['sender_profile_url'] = avatarUrl;
+      }
+      if (avatarColor is int) {
+        data['sender_avatar_color'] = avatarColor;
+      } else if (avatarColor is String) {
+        final parsed = int.tryParse(avatarColor);
+        if (parsed != null) {
+          data['sender_avatar_color'] = parsed;
+        }
+      }
+
+      final title =
+          displayName is String && displayName.isNotEmpty
+              ? displayName
+              : 'New message';
+
+      await NotificationService.sendPushNotification(
+        recipientIds: [recipientId],
+        title: title,
+        body: body,
+        data: data,
+      );
+    } catch (_) {}
+  }
+
+  void _handleSendFailure(String messageId) {
+    final isConnected = _supabase.realtime.isConnected;
+    final nextStatus = isConnected ? MessageStatus.failed : MessageStatus.sending;
+    for (var i = 0; i < _optimisticMessages.length; i++) {
+      final message = _optimisticMessages[i];
+      if (message.id == messageId) {
+        _optimisticMessages[i] = message.copyWith(status: nextStatus);
+        break;
+      }
+    }
+    _updateViewWithCombinedMessages();
+    if (isConnected) {
+      // _view.showMessage('Failed to send message.');
+    }
+  }
+
+  Future<void> _updateMessage(Message message) async {
+    await DatabaseService.saveMessages([message], pendingSync: true);
+    final changeId =
+        await DatabaseService.enqueueMessageChange(message, action: 'update');
+    try {
+      await _messageRepository.update(message);
+      await DatabaseService.removePendingChange(changeId);
+    } catch (e) {}
+  }
+
+  Future<void> _updateMessageStatus(
+    String messageId,
+    MessageStatus status,
+  ) async {
+    final message = getMessageById(messageId);
+    if (message == null) return;
+    final updated = message.copyWith(
+      status: status,
+      updatedAt: DateTime.now().toUtc(),
+    );
+    _messages = _messages.map((m) => m.id == messageId ? updated : m).toList();
+    _view.displayMessages(_messages);
+    _view.updateView();
+    await _updateMessage(updated);
+  }
+
+  List<Message> _decryptMessages(List<Message> messages) {
+    return messages.map((message) {
+      if (message.type != MessageType.text) {
+        return message;
+      }
+      if (message.content == null) {
+        return message;
+      }
+      try {
+        final decryptedContent = _encryptionService.decryptText(message.content!);
+        return message.copyWith(
+          content: decryptedContent,
+        );
+      } catch (e) {
+        return message.copyWith(content: 'Decryption Error');
+      }
+    }).toList();
   }
 
   bool _isTyping = false;
@@ -236,19 +420,10 @@ class ChatPresenter {
   /// Notify typing status. Debounced to avoid excessive database writes.
   void notifyTyping(bool isTyping) {
     if (currentUserId == null) return;
-    
-    if (isTyping && !_isTyping) {
-      // Started typing
-      _isTyping = true;
-      _chatRepository.setTypingStatus(_chat.id, currentUserId!, true);
-    }
-
+    _isTyping = isTyping;
     _typingTimer?.cancel();
     _typingTimer = Timer(const Duration(seconds: 2), () {
-      if (_isTyping) {
-        _isTyping = false;
-        _chatRepository.setTypingStatus(_chat.id, currentUserId!, false);
-      }
+      _isTyping = false;
     });
   }
 
@@ -294,23 +469,23 @@ class ChatPresenter {
             id: messageId,
             chatId: _chat.id,
             senderId: currentUserId!,
-            receiverId: _chat.getOtherUserId(currentUserId!),
-            type: MessageType.voice,
+            type: MessageType.audio,
             content: mediaUrl,
-            timestamp: DateTime.now().toUtc(),
+            status: MessageStatus.sending,
             replyToMessageId: _selectedMessageForReply?.id,
+            createdAt: DateTime.now().toUtc(),
+            updatedAt: DateTime.now().toUtc(),
           );
 
           // Add to optimistic messages for immediate display
           _optimisticMessages.add(message);
           _updateViewWithCombinedMessages();
 
-          final error = await _chatRepository.sendMessage(message);
-          if (error == null) {
+          final success = await _sendMessage(message);
+          if (success) {
             SoundService.instance.playSent();
           } else {
-            _optimisticMessages.removeWhere((m) => m.id == messageId);
-            _updateViewWithCombinedMessages();
+            _handleSendFailure(messageId);
           }
           _selectedMessageForReply = null;
           _view.updateView();
@@ -365,12 +540,12 @@ class ChatPresenter {
             id: messageId,
             chatId: _chat.id,
             senderId: currentUserId!,
-            receiverId: _chat.getOtherUserId(currentUserId!),
             type: MessageType.image,
             content: mediaUrl,
-            timestamp: DateTime.now().toUtc(),
             status: MessageStatus.sending, // Set initial status
             replyToMessageId: _selectedMessageForReply?.id,
+            createdAt: DateTime.now().toUtc(),
+            updatedAt: DateTime.now().toUtc(),
           );
 
           // Add to optimistic messages for immediate display
@@ -379,12 +554,11 @@ class ChatPresenter {
 
           // Introduce a delay to visually show "sending" state
           await Future.delayed(const Duration(seconds: 0));
-          final error = await _chatRepository.sendMessage(message);
-          if (error == null) {
+          final success = await _sendMessage(message);
+          if (success) {
             SoundService.instance.playSent();
           } else {
-            _optimisticMessages.removeWhere((m) => m.id == messageId);
-            _updateViewWithCombinedMessages();
+            _handleSendFailure(messageId);
           }
           _selectedMessageForReply = null;
           _view.updateView();
@@ -430,7 +604,14 @@ class ChatPresenter {
     }
 
     final encryptedContent = _encryptionService.encryptText(newContent);
-    await _chatRepository.editTextMessage(_chat.id, _selectedMessageForEdit!.id, encryptedContent);
+    final now = DateTime.now().toUtc();
+    final updated = _selectedMessageForEdit!.copyWith(
+      content: encryptedContent,
+      isEdited: true,
+      updatedAt: now,
+    );
+    await _updateMessage(updated);
+    _messages = _messages.map((m) => m.id == updated.id ? updated : m).toList();
     _selectedMessageForEdit = null;
     _view.updateView();
   }
@@ -442,25 +623,46 @@ class ChatPresenter {
       _view.showMessage('You can only delete your own messages.');
       return;
     }
-    await _chatRepository.deleteMessage(_chat.id, message.id);
+    final now = DateTime.now().toUtc();
+    final updated = message.copyWith(
+      isDeleted: true,
+      updatedAt: now,
+    );
+    await _updateMessage(updated);
+    _messages = _messages.map((m) => m.id == updated.id ? updated : m).toList();
     _view.updateView();
   }
 
   /// Updates the status of a message.
   Future<void> updateMessageStatus(String messageId, MessageStatus status) async {
-    await _chatRepository.updateMessageStatus(_chat.id, messageId, status);
+    await _updateMessageStatus(messageId, status);
   }
 
   /// Adds an emoji reaction to a message.
   Future<void> addReaction(String messageId, String emoji) async {
     if (currentUserId == null) return;
-    await _chatRepository.addReactionToMessage(_chat.id, messageId, currentUserId!, emoji);
+    final reaction = MessageReaction(
+      id: _uuid.v4(),
+      messageId: messageId,
+      userId: currentUserId!,
+      emoji: emoji,
+      createdAt: DateTime.now().toUtc(),
+    );
+    await _messageRepository.addReaction(reaction);
   }
 
   /// Removes a user's emoji reaction from a message.
   Future<void> removeReaction(String messageId) async {
     if (currentUserId == null) return;
-    await _chatRepository.removeReactionFromMessage(_chat.id, messageId, currentUserId!);
+    final message = getMessageById(messageId);
+    if (message == null) return;
+    final emoji = message.reactions[currentUserId!];
+    if (emoji == null || emoji.isEmpty) return;
+    await _messageRepository.removeReaction(
+      messageId: messageId,
+      userId: currentUserId!,
+      emoji: emoji,
+    );
   }
 
   /// Retrieves a message by its ID from the currently loaded messages.
@@ -472,13 +674,13 @@ class ChatPresenter {
     }
   }
 
-  Chat get chat => _chat;
+  PrivateChat get chat => _chat;
 
   /// Disposes of resources used by the presenter (e.g., audio recorder, player).
   /// Deletes a chat and all its messages.
   Future<void> deleteChat(String chatId) async {
     try {
-      await _chatRepository.deleteChat(chatId);
+      await _chatRepository.delete(chatId);
       _view.showMessage('Chat deleted successfully.');
     } catch (e) {
       _view.showMessage('Failed to delete chat: $e');
@@ -493,37 +695,33 @@ class ChatPresenter {
     _view.updateView();
 
     try {
-      final olderMessages = await _chatRepository.loadOlderMessages(_chat.id, _messages.length);
+      final oldest = _messages
+          .map((m) => m.createdAt ?? m.updatedAt)
+          .whereType<DateTime>()
+          .fold<DateTime?>(null, (prev, current) {
+        if (prev == null) return current;
+        return current.isBefore(prev) ? current : prev;
+      });
+      final olderMessages = await _messageRepository.fetchByChat(
+        _chat.id,
+        limit: 50,
+        before: oldest,
+      );
       
       if (olderMessages.isEmpty) {
         _hasMoreOlder = false;
       } else {
-        // Decrypt messages if needed
-        final decryptedOlder = olderMessages.map((message) {
-          if (message.type == MessageType.text) {
-            try {
-              final decryptedContent = _encryptionService.decryptText(message.content);
-              String? decryptedEditedContent;
-              if (message.editedContent != null) {
-                decryptedEditedContent = _encryptionService.decryptText(message.editedContent!);
-              }
-              return message.copyWith(
-                content: decryptedContent,
-                editedContent: decryptedEditedContent,
-              );
-            } catch (e) {
-              return message.copyWith(content: 'Decryption Error');
-            }
-          }
-          return message;
-        }).toList();
+        final decryptedOlder = _decryptMessages(olderMessages);
 
         // Add to existing messages and update view
-        _messages.addAll(decryptedOlder);
+        final existingIds = _messages.map((m) => m.id).toSet();
+        final newItems =
+            decryptedOlder.where((m) => !existingIds.contains(m.id)).toList();
+        _messages.addAll(newItems);
         _updateViewWithCombinedMessages();
       }
     } catch (e) {
-      print('ChatPresenter: Error loading older messages: $e');
+      debugPrint('ChatPresenter: Error loading older messages: $e');
     } finally {
       _isLoadingOlder = false;
       _view.updateView();
@@ -532,12 +730,11 @@ class ChatPresenter {
 
   void dispose() {
     // Clear active chat ID for the current user
-    if (currentUserId != null) {
-      _userRepository.updateActiveChatId(currentUserId!, null);
-    }
+    _activeChatState.closeChat();
     _audioRecorder.dispose();
     _audioPlayer.dispose();
     _otherUserStatusSubscription?.cancel(); // Cancel the status subscription
+    _participantsSubscription?.cancel();
     _readTimer?.cancel();
   }
 
@@ -545,23 +742,18 @@ class ChatPresenter {
   void markMessagesAsRead() async {
     if (NotificationService.currentActiveChatId != _chat.id) return;
     if (currentUserId == null) return;
-    final otherUserId = _chat.getOtherUserId(currentUserId!);
+    final otherUserId = _getOtherUserId(currentUserId);
     final deliveredMessages = _messages.where((message) =>
         message.senderId == otherUserId &&
         (message.status == MessageStatus.delivered || message.status == MessageStatus.sent));
 
     if (deliveredMessages.isEmpty) return;
 
-    final updates = <String, MessageStatus>{};
-    for (var message in deliveredMessages) {
-      updates[message.id] = MessageStatus.read;
-    }
-    
     try {
-      await _chatRepository.updateMessagesStatusBatch(_chat.id, updates);
+      await _chatRepository.markChatRead(_chat.id);
       // Update local state
       _messages = _messages.map((m) {
-        if (updates.containsKey(m.id)) {
+        if (m.senderId == otherUserId) {
           return m.copyWith(status: MessageStatus.read);
         }
         return m;
@@ -572,7 +764,7 @@ class ChatPresenter {
       NotificationService.flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode);
       NotificationService.flutterLocalNotificationsPlugin.cancel(_chat.id.hashCode + 1);
     } catch (e) {
-      print('ChatPresenter: Failed to mark messages as read: $e');
+      debugPrint('ChatPresenter: Failed to mark messages as read: $e');
     }
   }
 
@@ -585,5 +777,61 @@ class ChatPresenter {
         markMessagesAsRead();
       }
     });
+  }
+
+  Future<void> _loadParticipantsOnce() async {
+    final participantOtherId = _getOtherUserId(currentUserId);
+    if (participantOtherId.isEmpty) return;
+    try {
+      final participants = await _chatRepository.fetchParticipants(_chat.id);
+      ChatParticipant? otherParticipant;
+      for (final participant in participants) {
+        if (participant.userId == participantOtherId) {
+          otherParticipant = participant;
+          break;
+        }
+      }
+      if (otherParticipant == null) return;
+      _otherParticipant = otherParticipant;
+      await _applyOutgoingStatus(otherParticipant);
+    } catch (e) {}
+  }
+
+  DateTime? _messageTimeForId(String? messageId) {
+    if (messageId == null || messageId.isEmpty) return null;
+    final message = getMessageById(messageId);
+    return message?.createdAt ?? message?.updatedAt;
+  }
+
+  Future<void> _applyOutgoingStatus(ChatParticipant participant) async {
+    if (currentUserId == null) return;
+    if (_messages.isEmpty) return;
+    final deliveredTime = _messageTimeForId(participant.lastDeliveredMessageId);
+    final readTime = _messageTimeForId(participant.lastReadMessageId);
+    var changed = false;
+    _messages = _messages.map((message) {
+      if (message.senderId != currentUserId) return message;
+      if (message.status == MessageStatus.sending) return message;
+      final time = message.createdAt ?? message.updatedAt;
+      if (time == null) return message;
+      var nextStatus = message.status;
+      if (readTime != null && !time.isAfter(readTime)) {
+        nextStatus = MessageStatus.read;
+      } else if (deliveredTime != null && !time.isAfter(deliveredTime)) {
+        nextStatus = MessageStatus.delivered;
+      } else {
+        nextStatus = MessageStatus.sent;
+      }
+      if (nextStatus != message.status) {
+        changed = true;
+        return message.copyWith(status: nextStatus);
+      }
+      return message;
+    }).toList();
+    if (changed) {
+      _view.displayMessages(_messages);
+      _updateViewWithCombinedMessages();
+      await DatabaseService.saveMessages(_messages);
+    }
   }
 }
